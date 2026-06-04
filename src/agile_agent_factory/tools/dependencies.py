@@ -81,5 +81,10 @@ def resolve_dependencies(state: dict, product_root: Path) -> list[str]:
         deps.add(UX_TECH_TO_PACKAGE[tech])
 
     deps |= scan_third_party_imports(product_root)
+    # Runtime companions never directly imported but required at collection time
+    if "starlette" in deps:
+        deps.add("httpx")
+    if "fastapi" in deps:
+        deps.add("python-multipart")
     deps -= _EXCLUDED
     return sorted(deps)

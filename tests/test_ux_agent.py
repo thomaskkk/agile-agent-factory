@@ -85,3 +85,60 @@ def test_validate_ux_spec_rejects_unknown_technology():
 
     result = _validate_ux_spec({"ui_type": "cli", "technology": "pyside6"})
     assert result == _UX_FALLBACK
+
+
+def test_writes_ux_decisions_file(tmp_path, monkeypatch):
+    """design_user_experience must write BP_UX_DECISIONS with technology in content."""
+    import agile_agent_factory.agents.ux_agent as ux_agent
+
+    monkeypatch.setattr(ux_agent, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    (tmp_path / "business_idea.md").write_text("Build a CLI expense tracker.")
+    monkeypatch.setattr("agile_agent_factory.agents.ux_agent.BP_UX_DECISIONS", tmp_path / "ux_decisions.md")
+
+    jira = MagicMock()
+    jira._request.return_value = {"fields": {"summary": "Log expenses", "description": {}}}
+
+    llm_response = {
+        "ui_type": "cli",
+        "technology": "argparse",
+        "description": "Interactive CLI for expense logging",
+        "screens_or_flows": [{"name": "log", "purpose": "Add expense", "key_elements": ["amount"], "story_key": "TEST-1"}],
+        "state_management": "In-memory dict",
+        "design_decisions": ["Use subcommands"],
+    }
+
+    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", return_value=llm_response):
+        ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
+
+    ux_file = tmp_path / "ux_decisions.md"
+    assert ux_file.exists(), "BP_UX_DECISIONS must be written"
+    content = ux_file.read_text()
+    assert "argparse" in content
+
+
+def test_writes_ux_file_when_no_ui(tmp_path, monkeypatch):
+    """A minimal BP_UX_DECISIONS file must be written even when ui_type == 'none'."""
+    import agile_agent_factory.agents.ux_agent as ux_agent
+
+    monkeypatch.setattr(ux_agent, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    (tmp_path / "business_idea.md").write_text("Build a pure library.")
+    monkeypatch.setattr("agile_agent_factory.agents.ux_agent.BP_UX_DECISIONS", tmp_path / "ux_decisions.md")
+
+    jira = MagicMock()
+    jira._request.return_value = {"fields": {"summary": "Library core", "description": {}}}
+
+    llm_response = {
+        "ui_type": "none",
+        "technology": "none",
+        "description": "",
+        "screens_or_flows": [],
+        "state_management": "",
+        "design_decisions": [],
+    }
+
+    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", return_value=llm_response):
+        ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
+
+    ux_file = tmp_path / "ux_decisions.md"
+    assert ux_file.exists(), "BP_UX_DECISIONS must be written even when ui_type is none"
+    assert "No user interface required" in ux_file.read_text()

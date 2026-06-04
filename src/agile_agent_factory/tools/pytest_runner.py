@@ -18,7 +18,7 @@ def run_pytest(extra_packages: list[str] | None = None) -> tuple[int, str]:
         log(f"Running pytest against {tests_dir} with extra packages: {', '.join(extra_packages)}.")
     else:
         log(f"Running pytest against {tests_dir}.")
-    cmd = [UV_BIN, "run", *with_args, "pytest", tests_dir, "-v"]
+    cmd = [UV_BIN, "run", *with_args, "python", "-m", "pytest", tests_dir, "-v"]
     result = subprocess.run(
         cmd,
         capture_output=True,

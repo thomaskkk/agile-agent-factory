@@ -9,6 +9,25 @@ PRODUCT_ROOT = _REPO_ROOT.parent                    # repo root → Factory_proj
 CHECKPOINT_DB = _REPO_ROOT / "pipeline_checkpoint.db"
 BLUEPRINT_PATH = _REPO_ROOT / "handoff_blueprint.md"
 
+BLUEPRINT_DIR        = _REPO_ROOT / "blueprint"
+BP_CONTEXT_DIR       = BLUEPRINT_DIR / "context"
+BP_ARCHITECTURE_DIR  = BLUEPRINT_DIR / "architecture"
+BP_TASKS_DIR         = BLUEPRINT_DIR / "tasks"
+BP_QA_CRITERIA_DIR   = BP_CONTEXT_DIR / "qa_criteria"
+
+BP_BUSINESS_INTENT   = BP_CONTEXT_DIR / "business_intent.md"
+BP_UX_DECISIONS      = BP_CONTEXT_DIR / "ux_decisions.md"
+BP_ARCH_DECISIONS    = BP_ARCHITECTURE_DIR / "decisions.md"
+BP_ARCH_CONSTRAINTS  = BP_ARCHITECTURE_DIR / "constraints.md"
+
+
+def bp_qa_criteria_path(story_key: str) -> Path:
+    return BP_QA_CRITERIA_DIR / f"{story_key}.md"
+
+
+def bp_task_path(story_key: str) -> Path:
+    return BP_TASKS_DIR / f"{story_key}.md"
+
 JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "")
 JIRA_USER_EMAIL = os.environ.get("JIRA_USER_EMAIL", "")
 JIRA_API_KEY = os.environ.get("JIRA_API_KEY", "")

@@ -111,3 +111,77 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch):
     assert result["dependencies"] == ["flask"]
     # architecture is returned in the result dict (LangGraph checkpointer persists it)
     assert result["architecture"] == arch
+
+
+def test_writes_architecture_files(tmp_path, monkeypatch):
+    """design_architecture must write both decisions.md and constraints.md."""
+    import agile_agent_factory.agents.tl_agent as tl
+    monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    monkeypatch.setattr(tl, "BLUEPRINT_PATH", tmp_path / "handoff_blueprint.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
+    (tmp_path / "business_idea.md").write_text("Build a task manager.")
+
+    arch = {
+        "files": [{"path": "app/main.py", "purpose": "Entry point", "functions": ["main()"]}],
+        "subtasks": [],
+        "import_rules": "from app.main import main",
+        "test_command": "uv run pytest ../tests/ -v",
+        "dependencies": ["requests"],
+    }
+    state = _state("upstream_ux_done")
+
+    jira = MagicMock()
+    jira.get_subtask_issue_type.return_value = "Subtask"
+
+    with patch.object(tl, "call_llm_json", return_value=arch):
+        tl.design_architecture(jira, ["F1-1"], {}, {}, state)
+
+    decisions = tmp_path / "decisions.md"
+    constraints = tmp_path / "constraints.md"
+    assert decisions.exists(), "decisions.md must be written"
+    assert constraints.exists(), "constraints.md must be written"
+    assert "app/main.py" in decisions.read_text()
+    assert "requests" in decisions.read_text()
+    assert "pytest" in constraints.read_text()
+
+
+def test_writes_task_file_per_story(tmp_path, monkeypatch):
+    """design_architecture must write one task file per story in BP_TASKS_DIR."""
+    import agile_agent_factory.agents.tl_agent as tl
+    monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    monkeypatch.setattr(tl, "BLUEPRINT_PATH", tmp_path / "handoff_blueprint.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
+
+    tasks_dir = tmp_path / "tasks"
+    monkeypatch.setattr(
+        "agile_agent_factory.agents.tl_agent.bp_task_path",
+        lambda sk: tasks_dir / f"{sk}.md",
+    )
+    (tmp_path / "business_idea.md").write_text("Build a task manager.")
+
+    arch = {
+        "files": [{"path": "app/main.py", "purpose": "Entry point", "functions": []}],
+        "subtasks": [],
+        "import_rules": "from app.main import main",
+        "test_command": "uv run pytest ../tests/ -v",
+        "dependencies": [],
+    }
+    gherkin = {
+        "F1-1": ["Scenario: Create task\n  Given empty list\n  When I add\n  Then count is 1"],
+        "F1-2": ["Scenario: Delete task\n  Given one task\n  When I delete\n  Then count is 0"],
+    }
+    state = _state("upstream_ux_done", story_keys=["F1-1", "F1-2"])
+
+    jira = MagicMock()
+    jira.get_subtask_issue_type.return_value = "Subtask"
+
+    with patch.object(tl, "call_llm_json", return_value=arch):
+        tl.design_architecture(jira, ["F1-1", "F1-2"], gherkin, {}, state)
+
+    assert (tasks_dir / "F1-1.md").exists(), "Task file must be written for F1-1"
+    assert (tasks_dir / "F1-2.md").exists(), "Task file must be written for F1-2"
+    assert "Create task" in (tasks_dir / "F1-1.md").read_text()
+    assert "Delete task" in (tasks_dir / "F1-2.md").read_text()

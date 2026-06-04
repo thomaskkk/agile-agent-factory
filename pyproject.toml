@@ -16,6 +16,7 @@ dependencies = [
     "langgraph>=0.2.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
     "langgraph-cli[inmem]>=0.4.27",
+    "json-repair>=0.30.0",
 ]
 
 [build-system]

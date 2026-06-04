@@ -1,4 +1,4 @@
-from agile_agent_factory.config import PRODUCT_ROOT, UX_MODEL
+from agile_agent_factory.config import PRODUCT_ROOT, UX_MODEL, BP_UX_DECISIONS
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
@@ -90,8 +90,42 @@ User stories and acceptance criteria:
     if spec["ui_type"] != "none":
         _append_ux_to_stories(jira, story_keys, spec)
 
+    _write_ux_decisions(spec)
     log(f"UI/UX design complete: ui_type={spec['ui_type']}, technology={spec['technology']}.")
     return spec
+
+
+def _write_ux_decisions(spec: dict) -> None:
+    BP_UX_DECISIONS.parent.mkdir(parents=True, exist_ok=True)
+    if spec.get("ui_type", "none") == "none":
+        BP_UX_DECISIONS.write_text("# UI/UX\n\nNo user interface required.\n")
+        log("blueprint/context/ux_decisions.md written (no-UI marker).")
+        return
+
+    flows_md = "\n".join(
+        f"- **{f.get('name', '')}** ({f.get('story_key', '')}): {f.get('purpose', '')}"
+        for f in spec.get("screens_or_flows", [])
+    )
+    decisions_md = "\n".join(f"- {d}" for d in spec.get("design_decisions", []))
+    content = f"""# UI/UX Decisions
+
+## Type
+{spec.get('ui_type')} | Technology: {spec.get('technology')}
+
+## Description
+{spec.get('description', '')}
+
+## Screens / Flows
+{flows_md}
+
+## State Management
+{spec.get('state_management', '')}
+
+## Design Decisions
+{decisions_md}
+"""
+    BP_UX_DECISIONS.write_text(content)
+    log("blueprint/context/ux_decisions.md written.")
 
 
 def _append_ux_to_stories(jira: JiraClient, story_keys: list[str], spec: dict) -> None:

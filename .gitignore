@@ -4,7 +4,7 @@
 .env.local
 .env.*.local
 state_manager.json
-handoff_blueprint.md
+blueprint/
 *.log
 __pycache__/
 *.py[cod]

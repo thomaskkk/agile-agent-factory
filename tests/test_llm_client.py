@@ -248,3 +248,55 @@ def test_call_llm_falls_back_to_global_openai_when_specified_anthropic_model_fai
 
     result = llm_client.call_llm("prompt", model="claude-haiku-4-5-20251001")
     assert result == "openai fallback"
+
+
+def test_anthropic_prefill_prepended_to_response(mocker):
+    """When prefill is provided, _call_anthropic must include it as AIMessage and prepend
+    it to the response, so callers receive the complete text starting with the prefill."""
+    from langchain_core.messages import AIMessage
+
+    mock_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatAnthropic")
+    mock_chat.return_value.invoke.return_value = mocker.MagicMock(
+        content='{"path": "app/x.py", "content": "x"}]'  # continuation after "["
+    )
+
+    import agile_agent_factory.tools.llm_client as llm_client
+    result = llm_client._call_anthropic("fix this", prefill="[")
+
+    # The full response must start with the prefill
+    assert result.startswith("[")
+    # AIMessage with "[" was included in the messages passed to invoke
+    call_args = mock_chat.return_value.invoke.call_args[0][0]
+    assert any(isinstance(m, AIMessage) and m.content == "[" for m in call_args)
+
+
+def test_anthropic_prefill_retries_without_prefill_on_unsupported_model(mocker):
+    """When the model rejects prefill with a 400, _call_anthropic must retry without AIMessage."""
+    from langchain_core.messages import AIMessage
+
+    mock_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatAnthropic")
+    ok_response = mocker.MagicMock(content="plain response")
+    mock_chat.return_value.invoke.side_effect = [
+        Exception("does not support assistant message prefill"),
+        ok_response,
+    ]
+
+    import agile_agent_factory.tools.llm_client as llm_client
+    result = llm_client._call_anthropic("fix this", prefill="[")
+
+    assert result == "plain response"
+    assert mock_chat.return_value.invoke.call_count == 2
+    # Second call must have no AIMessage
+    second_call_messages = mock_chat.return_value.invoke.call_args_list[1][0][0]
+    assert not any(isinstance(m, AIMessage) for m in second_call_messages)
+
+
+def test_call_llm_json_passes_prefill_to_call_llm(mocker):
+    """call_llm_json must forward the prefill parameter to call_llm."""
+    mock_call_llm = mocker.patch(
+        "agile_agent_factory.tools.llm_client.call_llm",
+        return_value='[{"path": "app/x.py", "content": "x"}]',
+    )
+    import agile_agent_factory.tools.llm_client as llm_client
+    llm_client.call_llm_json("prompt", prefill="[")
+    assert mock_call_llm.call_args[1]["prefill"] == "["

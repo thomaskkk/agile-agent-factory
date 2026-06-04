@@ -1,4 +1,4 @@
-from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, PO_MODEL
+from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, PO_MODEL, BP_BUSINESS_INTENT
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_mention_doc, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
@@ -111,6 +111,7 @@ Business idea to analyze:
             except ValueError as e:
                 log(str(e))
 
+    _write_business_intent(idea, result.get("has_ui", False), epic_keys, story_keys)
     return {
         **state,
         "current_phase": "upstream_po_done",
@@ -119,6 +120,28 @@ Business idea to analyze:
         "has_ui": result.get("has_ui", False),
         "story_to_epic": story_to_epic,
     }
+
+
+def _write_business_intent(idea: str, has_ui: bool, epic_keys: list, story_keys: list) -> None:
+    BP_BUSINESS_INTENT.parent.mkdir(parents=True, exist_ok=True)
+    epics_block = "\n".join(f"- {k}" for k in epic_keys) or "(none)"
+    stories_block = "\n".join(f"- {k}" for k in story_keys) or "(none)"
+    content = f"""# Business Intent
+
+## Has UI
+{has_ui}
+
+## Epics
+{epics_block}
+
+## Stories
+{stories_block}
+
+## Business Idea
+{idea}
+"""
+    BP_BUSINESS_INTENT.write_text(content)
+    log(f"blueprint/context/business_intent.md written.")
 
 
 def _handle_upstream_hitl(jira: JiraClient, ambiguity: str, state: dict) -> dict:

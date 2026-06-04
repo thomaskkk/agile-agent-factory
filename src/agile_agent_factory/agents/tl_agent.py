@@ -1,4 +1,7 @@
-from agile_agent_factory.config import PRODUCT_ROOT, BLUEPRINT_PATH, TL_MODEL
+from agile_agent_factory.config import (
+    PRODUCT_ROOT, BLUEPRINT_PATH, TL_MODEL,
+    BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS, bp_task_path,
+)
 from agile_agent_factory.tools.dependencies import UX_TECH_TO_PACKAGE
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
 from agile_agent_factory.tools.llm_client import call_llm_json
@@ -107,6 +110,9 @@ Business idea:
             log(f"Created Subtask: {task['key']} — {subtask['title']}")
 
     _write_handoff_blueprint(idea, story_keys, gherkin_criteria, result, ux_spec)
+    _write_architecture_files(result)
+    for sk in story_keys:
+        _write_story_task(sk, result, gherkin_criteria, ux_spec)
     _transition_all(jira, all_upstream_keys, "To Development")
     dependencies = [d for d in result.get("dependencies", []) if isinstance(d, str) and d.strip()]
     # The LLM sometimes omits dependencies entirely — seed the UX technology so an
@@ -212,3 +218,109 @@ PYTHONPATH is set to the product root before running pytest.
 """
     BLUEPRINT_PATH.write_text(content)
     log(f"handoff_blueprint.md written to {BLUEPRINT_PATH}.")
+
+
+def _write_architecture_files(arch: dict) -> None:
+    BP_ARCH_DECISIONS.parent.mkdir(parents=True, exist_ok=True)
+
+    files_section = "\n".join(
+        f"### `{f['path']}`\n**Purpose:** {f.get('purpose', '')}\n**Functions:** {', '.join(f.get('functions', []))}"
+        for f in arch.get("files", [])
+    )
+    deps = [d for d in arch.get("dependencies", []) if isinstance(d, str) and d.strip()]
+    deps_section = "\n".join(f"- `{d}`" for d in deps) if deps else "(none)"
+    BP_ARCH_DECISIONS.write_text(
+        f"# Architecture Decisions\n\n## File Contracts\n\n{files_section}\n\n## Third-Party Dependencies\n{deps_section}\n"
+    )
+
+    BP_ARCH_CONSTRAINTS.parent.mkdir(parents=True, exist_ok=True)
+    expected_files = "\n".join(f"- `{f['path']}`" for f in arch.get("files", []))
+    BP_ARCH_CONSTRAINTS.write_text(
+        f"""# Architecture Constraints
+
+## Import Rules
+{arch.get('import_rules', 'Use `from app.<module> import <name>` from the product root.')}
+
+## Permitted Target Directories
+- `../app/` — all production source code
+- `../tests/` — all test code
+
+## Test Command
+```bash
+{arch.get('test_command', 'uv run pytest ../tests/ -v')}
+```
+
+## Expected Output Files
+{expected_files}
+
+## Definition of Done
+- All pytest tests pass with exit code 0
+- No absolute paths in any generated file
+- All imports use `app.*` from the product root
+- No nested `app/app/` or `tests/tests/` directories
+"""
+    )
+    log("blueprint/architecture/decisions.md and constraints.md written.")
+
+
+def _write_story_task(
+    story_key: str,
+    arch: dict,
+    gherkin_criteria: dict[str, list[str]],
+    ux_spec: dict,
+) -> None:
+    path = bp_task_path(story_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    criteria = gherkin_criteria.get(story_key, [])
+    criteria_block = "\n\n".join(criteria) if criteria else "(no criteria)"
+
+    files_section = "\n".join(
+        f"- `{f['path']}`: {f.get('purpose', '')} | Functions: {', '.join(f.get('functions', []))}"
+        for f in arch.get("files", [])
+    )
+
+    ux_flows_section = ""
+    if ux_spec and ux_spec.get("ui_type", "none") != "none":
+        relevant = [
+            f for f in ux_spec.get("screens_or_flows", [])
+            if f.get("story_key") == story_key
+        ]
+        if relevant:
+            flows_md = "\n".join(
+                f"- **{f.get('name', '')}**: {f.get('purpose', '')}"
+                for f in relevant
+            )
+            ux_flows_section = f"\n## UX Flows (this story)\n{flows_md}\n"
+
+    content = f"""# Task: {story_key}
+
+## Acceptance Criteria
+{criteria_block}
+{ux_flows_section}
+## File Contracts
+{files_section}
+
+## Import Rules
+{arch.get('import_rules', 'Use `from app.<module> import <name>` from the product root.')}
+
+## Test Command
+```bash
+{arch.get('test_command', 'uv run pytest ../tests/ -v')}
+```
+
+## Definition of Done
+- All pytest tests pass with exit code 0
+- No absolute paths in any generated file
+- All imports use `app.*` from the product root
+- No nested `app/app/` or `tests/tests/` directories
+
+## Context Pointers
+- Business intent: `blueprint/context/business_intent.md`
+- Full UX spec: `blueprint/context/ux_decisions.md`
+- QA criteria (this story): `blueprint/context/qa_criteria/{story_key}.md`
+- Architecture decisions: `blueprint/architecture/decisions.md`
+- Architecture constraints: `blueprint/architecture/constraints.md`
+"""
+    path.write_text(content)
+    log(f"blueprint/tasks/{story_key}.md written.")

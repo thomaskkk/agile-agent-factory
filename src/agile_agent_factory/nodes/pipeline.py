@@ -13,6 +13,7 @@ from agile_agent_factory.config import (
     MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, MAX_REVIEW_RETRIES,
     PRODUCT_ROOT, BLUEPRINT_PATH,
     DEV_MODEL, TEST_MODEL,
+    bp_task_path,
 )
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_bullet_list, make_adf_doc, make_adf_heading
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm_json
@@ -102,6 +103,15 @@ def _notify_quota(jira: JiraClient, issue_key: str | None, exc: LLMQuotaExceeded
     log(f"Quota exceeded ({provider}). Pipeline pausing for human intervention.")
 
 
+def _load_dev_context(story_key: str) -> str:
+    task_path = bp_task_path(story_key)
+    if task_path.exists():
+        return task_path.read_text()
+    if BLUEPRINT_PATH.exists():
+        return BLUEPRINT_PATH.read_text()
+    return ""
+
+
 def _write_generated_files(files: list) -> list[str]:
     written: list[str] = []
     for f in files:
@@ -117,23 +127,40 @@ def _write_generated_files(files: list) -> list[str]:
 
 
 def _generate_code_with_llm(blueprint: str, review_feedback: str = "", model: str | None = None) -> None:
-    system = (
-        "You are a senior Python developer implementing a feature from a technical blueprint. "
-        "Return a JSON list of files to write. Use only paths starting with app/ or tests/. "
-        "Never use absolute paths or nested app/app/ paths."
-    )
-    feedback_section = (
-        f"\n\nPrevious code review rejected this implementation. You MUST fix all of the following:\n{review_feedback}"
-        if review_feedback else ""
-    )
-    prompt = f"""Implement the following blueprint. Return JSON only:
+    if review_feedback:
+        system = (
+            "You are a senior Python developer fixing a code review rejection. "
+            "Return a JSON list of ONLY the files that must change to fix the rejection. "
+            "Make minimal targeted changes. Do NOT rewrite unrelated files. "
+            "Use only paths starting with app/ or tests/. "
+            "Never use absolute paths or nested app/app/ paths."
+        )
+        prompt = f"""Fix the following code review rejection. Return JSON only — only the files that must change:
+[
+  {{"path": "app/module.py", "content": "# full corrected content"}},
+  ...
+]
+
+Reviewer rejection (you MUST fix this):
+{review_feedback}
+
+Architecture context (read-only — do not re-implement from scratch):
+{blueprint}
+"""
+    else:
+        system = (
+            "You are a senior Python developer implementing a feature from a technical blueprint. "
+            "Return a JSON list of files to write. Use only paths starting with app/ or tests/. "
+            "Never use absolute paths or nested app/app/ paths."
+        )
+        prompt = f"""Implement the following blueprint. Return JSON only:
 [
   {{"path": "app/module.py", "content": "# full file content here"}},
   ...
 ]
 
 Blueprint:
-{blueprint}{feedback_section}
+{blueprint}
 """
     files = call_llm_json(prompt, system=system, fallback=_FILE_FALLBACK, model=model)
     _write_generated_files(files)
@@ -179,17 +206,20 @@ Current source files:
 {files_block}
 """
     try:
-        files = call_llm_json(prompt, system=system, model=model)
+        files = call_llm_json(prompt, system=system, model=model, prefill="[")
     except json.JSONDecodeError:
         log("LLM correction produced unparseable response — no files written.")
         return []
     if isinstance(files, dict):
         files = [files]
-    if not isinstance(files, list) or not all(isinstance(f, dict) for f in files):
-        log(f"LLM correction returned unexpected structure ({type(files).__name__}) — no files written.")
+    elif isinstance(files, list):
+        # Filter out any non-dict elements (stray strings, nested lists, etc.)
+        files = [f for f in files if isinstance(f, dict)]
+    else:
+        log(f"LLM correction returned unexpected type ({type(files).__name__}) — no files written.")
         return []
     if not files:
-        log("LLM correction returned empty file list — no files written.")
+        log("LLM correction returned no usable file entries — no files written.")
         return []
     written = _write_generated_files(files)
     log(f"Correction applied: {len(written)} file(s) updated.")
@@ -420,7 +450,7 @@ def dev_node(state: PipelineState) -> dict:
         for subtask_key in (story.get("subtasks") or state.get("subtasks", {})).values():
             _safe_transition(jira, subtask_key, "Development")
 
-    blueprint = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+    blueprint = _load_dev_context(sk)
     review_feedback = story.get("review_rejection_reason", "")
 
     try:
@@ -464,7 +494,7 @@ def test_node(state: PipelineState) -> dict:
     sk, story = _active_story(state)
     log(f"Test: running pytest for {sk}.")
 
-    blueprint = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+    blueprint = _load_dev_context(sk)
     deps = resolve_dependencies(_to_legacy_state(state, sk), PRODUCT_ROOT)
 
     retries = 0
@@ -574,12 +604,13 @@ def review_node(state: PipelineState) -> dict:
     for ek in state.get("epic_keys", []):
         _safe_transition(jira, ek, "In Code Review")
 
+    story_criteria = state.get("gherkin_criteria", {}).get(sk, [])
     try:
-        result = review_patch(jira, [sk])
+        result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk)
     except LLMQuotaExceeded as e:
         _notify_quota(jira, sk, e)
         interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
-        result = review_patch(jira, [sk])
+        result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk)
 
     approved = result.get("approved", False)
     reason = result.get("reason", "")

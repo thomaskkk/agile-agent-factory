@@ -16,16 +16,25 @@ def is_available() -> bool:
 
 
 def run_task(task_description: str, blueprint: str, review_feedback: str = "") -> dict[str, object]:
-    feedback_section = (
-        f"\n\nPrevious code review rejected this implementation. You MUST address all of the following:\n{review_feedback}"
-        if review_feedback else ""
-    )
-    full_message = (
-        "You are implementing a software product. "
-        "Write code to app/ and tests to tests/. "
-        f"Follow the blueprint exactly.\n\nBlueprint:\n{blueprint}\n\nTask:\n{task_description}"
-        f"{feedback_section}"
-    )
+    if review_feedback:
+        # Rework mode: review feedback is the primary directive.
+        # Showing the blueprint as read-only context so aider knows the file layout,
+        # but the feedback — not the blueprint — defines what must change.
+        full_message = (
+            "You are fixing a code review rejection. "
+            "Make only the minimal targeted changes needed to address the reviewer's feedback below. "
+            "Do NOT rewrite files that are unrelated to the rejection. "
+            "The blueprint is read-only context showing the existing architecture — "
+            "do not re-implement it from scratch.\n\n"
+            f"Reviewer rejection (you MUST fix this):\n{review_feedback}\n\n"
+            f"Architecture context (read-only):\n{blueprint}"
+        )
+    else:
+        full_message = (
+            "You are implementing a software product. "
+            "Write code to app/ and tests to tests/. "
+            f"Follow the blueprint exactly.\n\nBlueprint:\n{blueprint}\n\nTask:\n{task_description}"
+        )
     cmd = [
         "aider",
         "--model", AIDER_MODEL,

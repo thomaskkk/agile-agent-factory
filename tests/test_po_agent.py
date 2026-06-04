@@ -108,3 +108,38 @@ def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkey
         analyze_and_provision(jira, state_with_feedback)
 
     assert "only needs to run on Linux" in captured_prompt["value"]
+
+
+def test_writes_business_intent(tmp_path, monkeypatch):
+    """After analyze_and_provision, BP_BUSINESS_INTENT must exist and contain idea text."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build a kanban board app.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+    monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "business_intent.md")
+
+    llm_response = {
+        "has_ambiguity": False,
+        "ambiguity_description": "",
+        "has_ui": True,
+        "epics": [
+            {
+                "title": "Board",
+                "description": "Main epic",
+                "stories": [{"title": "Add card", "description": "As a user...", "definition_of_done": ["card saved"]}],
+            }
+        ],
+    }
+
+    jira = MagicMock()
+    jira.create_issue.side_effect = [{"key": "KB-1"}, {"key": "KB-2"}]
+
+    with patch("agile_agent_factory.agents.po_agent.call_llm_json", return_value=llm_response):
+        analyze_and_provision(jira, {"status": "READY", "current_phase": None, "story_keys": [], "epic_keys": [], "blocking_issue_key": None, "subtasks": {}, "review_retries": 0})
+
+    intent_file = tmp_path / "business_intent.md"
+    assert intent_file.exists(), "BP_BUSINESS_INTENT must be written after provisioning"
+    content = intent_file.read_text()
+    assert "kanban board app" in content

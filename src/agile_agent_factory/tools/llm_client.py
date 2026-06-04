@@ -6,7 +6,7 @@ from typing import Optional
 import anthropic
 import openai
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langsmith import traceable
 
@@ -38,7 +38,7 @@ def _detect_provider(model: str) -> str:
     return LLM_PRIMARY_PROVIDER
 
 
-def _call_anthropic(prompt: str, system: str = "", model: str | None = None) -> str:
+def _call_anthropic(prompt: str, system: str = "", model: str | None = None, prefill: str = "") -> str:
     effective_model = model or ANTHROPIC_MODEL
     log(f"Calling LLM provider: anthropic ({effective_model}).")
     llm = ChatAnthropic(
@@ -52,20 +52,36 @@ def _call_anthropic(prompt: str, system: str = "", model: str | None = None) -> 
     if system:
         messages.append(SystemMessage(content=system))
     messages.append(HumanMessage(content=prompt))
+    if prefill:
+        # Anthropic assistant-prefill: model continues from this exact text,
+        # returning only the continuation. Prepend it to reconstruct the full output.
+        # Not supported on all model versions — caught and retried below if rejected.
+        messages.append(AIMessage(content=prefill))
     try:
         response = llm.invoke(messages)
     except anthropic.RateLimitError as e:
         raise LLMQuotaExceeded("anthropic", str(e)) from e
+    except Exception as e:
+        if prefill and "does not support assistant message prefill" in str(e):
+            log("Model does not support prefill — retrying without it.")
+            messages_no_prefill = [m for m in messages if not isinstance(m, AIMessage)]
+            try:
+                response = llm.invoke(messages_no_prefill)
+            except anthropic.RateLimitError as e2:
+                raise LLMQuotaExceeded("anthropic", str(e2)) from e2
+            prefill = ""  # no continuation to prepend
+        else:
+            raise
     content = response.content
     if isinstance(content, list):
         # langchain_anthropic returns a list of content blocks for multi-part responses
-        return "".join(
+        content = "".join(
             (b["text"] if isinstance(b, dict) else b.text)
             for b in content
             if (isinstance(b, dict) and b.get("type") == "text")
             or getattr(b, "type", None) == "text"
         )
-    return content
+    return (prefill + content) if prefill else content
 
 
 def _call_openai(prompt: str, system: str = "", model: str | None = None) -> str:
@@ -91,7 +107,7 @@ def _call_openai(prompt: str, system: str = "", model: str | None = None) -> str
     return response.content
 
 
-def _call_with_fallback(prompt: str, system: str = "", model: str | None = None) -> str:
+def _call_with_fallback(prompt: str, system: str = "", model: str | None = None, prefill: str = "") -> str:
     if model:
         detected = _detect_provider(model)
         if detected == "openai":
@@ -99,13 +115,13 @@ def _call_with_fallback(prompt: str, system: str = "", model: str | None = None)
                 return _call_openai(prompt, system, model)
             except LLMQuotaExceeded:
                 log(f"openai ({model}) quota exceeded. Trying anthropic fallback.")
-                return _call_anthropic(prompt, system)
+                return _call_anthropic(prompt, system, prefill=prefill)
             except Exception as e:
                 log(f"openai ({model}) failed: {e}. Trying anthropic fallback.")
-                return _call_anthropic(prompt, system)
+                return _call_anthropic(prompt, system, prefill=prefill)
         else:
             try:
-                return _call_anthropic(prompt, system, model)
+                return _call_anthropic(prompt, system, model, prefill=prefill)
             except LLMQuotaExceeded:
                 log(f"anthropic ({model}) quota exceeded. Trying openai fallback.")
                 return _call_openai(prompt, system)
@@ -122,20 +138,20 @@ def _call_with_fallback(prompt: str, system: str = "", model: str | None = None)
             _call_anthropic, "anthropic", _call_openai, "openai"
         )
     try:
-        return primary(prompt, system)
+        return primary(prompt, system, prefill=prefill) if primary is _call_anthropic else primary(prompt, system)
     except LLMQuotaExceeded:
         log(f"{primary_name} quota exceeded. Trying {fallback_name} fallback.")
-        return fallback(prompt, system)
+        return fallback(prompt, system, prefill=prefill) if fallback is _call_anthropic else fallback(prompt, system)
     except Exception as e:
         log(f"Primary LLM provider ({primary_name}) failed: {e}. Trying {fallback_name}.")
-        return fallback(prompt, system)
+        return fallback(prompt, system, prefill=prefill) if fallback is _call_anthropic else fallback(prompt, system)
 
 
 @traceable(name="call_llm", run_type="llm")
-def call_llm(prompt: str, system: str = "", model: str | None = None) -> str:
+def call_llm(prompt: str, system: str = "", model: str | None = None, prefill: str = "") -> str:
     for attempt in range(LLM_QUOTA_MAX_RETRIES + 1):
         try:
-            return _call_with_fallback(prompt, system, model)
+            return _call_with_fallback(prompt, system, model, prefill=prefill)
         except LLMQuotaExceeded as e:
             if attempt >= LLM_QUOTA_MAX_RETRIES:
                 raise
@@ -149,9 +165,9 @@ def call_llm(prompt: str, system: str = "", model: str | None = None) -> str:
 
 
 def call_llm_json(
-    prompt: str, system: str = "", fallback: Optional[dict] = None, model: str | None = None
+    prompt: str, system: str = "", fallback: Optional[dict] = None, model: str | None = None, prefill: str = ""
 ) -> dict:
-    raw = call_llm(prompt, system, model)
+    raw = call_llm(prompt, system, model, prefill=prefill)
 
     # Primary: strip markdown fences if the entire response is a fenced block
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw.strip())
@@ -171,6 +187,15 @@ def call_llm_json(
                 return json.loads(cleaned[start : end + 1])
             except json.JSONDecodeError:
                 pass
+
+    # Last resort: json-repair handles unescaped quotes and other LLM escaping mistakes
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(cleaned, return_objects=True)
+        if repaired not in (None, "", [], {}):
+            return repaired
+    except Exception:
+        pass
 
     # Nothing parseable — log and use fallback or raise
     log(f"JSON parse failed. Raw response (first 300 chars): {repr(raw[:300])}.")
