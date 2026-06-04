@@ -12,7 +12,7 @@ MAX_REVIEW_FILE_CHARS = 8000      # generous per-file cap; small products are we
 MAX_REVIEW_TOTAL_CHARS = 50000    # overall prompt budget for the files block
 
 
-def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None) -> dict:
+def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> dict:
     for key in story_keys:
         try:
             jira.transition_issue(key, "In Code Review")
@@ -86,11 +86,23 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
         "Output ONLY a JSON object — no prose, no preamble, no markdown fences. "
         "Schema: {\"approved\": bool, \"rejection_reason\": \"\"}"
     )
+    scope_instruction = ""
+    if write_scope:
+        owned = "\n".join(f"  - {f}" for f in write_scope)
+        scope_instruction = f"""
+Story write scope — files owned by this story:
+{owned}
+
+Evaluate correctness and DoD compliance ONLY for the files listed above.
+Issues found in files OUTSIDE this scope are pre-existing problems owned by other
+stories and MUST NOT cause this review to fail — note them as informational only.
+"""
+
     prompt = f"""Review the generated code against the blueprint DoD.
 You are shown the COMPLETE contents of all generated files below — Python source,
 HTML templates, CSS, and JS. Do not assume any file type is missing unless it is
 absent from the list. Judge functional correctness and DoD coverage only.
-
+{scope_instruction}
 Acceptance criteria (DoD):
 {dod_section[:8000]}
 

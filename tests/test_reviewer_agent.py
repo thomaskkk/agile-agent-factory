@@ -180,3 +180,60 @@ def test_uses_qa_criteria_file_when_no_story_criteria(tmp_path):
     assert captured, "call_llm_json was never called"
     prompt = captured[0]
     assert "Check from file" in prompt, "Prompt must include QA criteria file content"
+
+
+# ---------------------------------------------------------------------------
+# write_scope scopes the review verdict to owned files only
+# ---------------------------------------------------------------------------
+
+def test_write_scope_injected_into_prompt(tmp_path):
+    """When write_scope is provided, the prompt must name owned files and tell the
+    LLM not to fail the review for issues in files outside that scope."""
+    jira = _make_jira()
+    captured: list[str] = []
+
+    def capture_llm(prompt, **kwargs):
+        captured.append(prompt)
+        return {"approved": True, "rejection_reason": ""}
+
+    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "main.py").write_text("x = 1")
+
+        reviewer_agent.review_patch(
+            jira, ["FAKE_STORY"],
+            write_scope=["tests/test_models.py", "app/models.py"],
+        )
+
+    assert captured, "call_llm_json was never called"
+    prompt = captured[0]
+    assert "tests/test_models.py" in prompt, "Owned test file must appear in scope instruction"
+    assert "app/models.py" in prompt, "Owned app file must appear in scope instruction"
+    assert "outside" in prompt.lower() or "scope" in prompt.lower(), \
+        "Prompt must include a scope/outside-scope instruction"
+
+
+def test_write_scope_absent_when_not_provided(tmp_path):
+    """When write_scope is None, the prompt must NOT contain a scope restriction section."""
+    jira = _make_jira()
+    captured: list[str] = []
+
+    def capture_llm(prompt, **kwargs):
+        captured.append(prompt)
+        return {"approved": True, "rejection_reason": ""}
+
+    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "main.py").write_text("x = 1")
+
+        reviewer_agent.review_patch(jira, ["FAKE_STORY"])  # no write_scope
+
+    assert captured
+    assert "Story write scope" not in captured[0], \
+        "Scope section must be absent when write_scope is not provided"

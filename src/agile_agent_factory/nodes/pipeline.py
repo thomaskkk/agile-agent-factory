@@ -8,6 +8,7 @@ SqliteSaver checkpointer handles persistence between nodes automatically.
 from __future__ import annotations
 
 import json
+import re
 
 from agile_agent_factory.config import (
     MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, MAX_REVIEW_RETRIES,
@@ -617,12 +618,26 @@ def review_node(state: PipelineState) -> dict:
         _safe_transition(jira, ek, "In Code Review")
 
     story_criteria = state.get("gherkin_criteria", {}).get(sk, [])
+
+    # Derive write scope from test_contract so the reviewer only verdicts on owned files
+    tc = story.get("test_contract", {})
+    write_scope: list[str] = []
+    if tc:
+        if tc.get("test_file"):
+            write_scope.append(tc["test_file"])
+        for imp in (tc.get("target_imports") or []):
+            m = re.match(r"from (app(?:\.\w+)+) import", imp)
+            if m:
+                path_str = m.group(1).replace(".", "/") + ".py"
+                if path_str not in write_scope:
+                    write_scope.append(path_str)
+
     try:
-        result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk)
+        result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
     except LLMQuotaExceeded as e:
         _notify_quota(jira, sk, e)
         interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
-        result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk)
+        result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
 
     approved = result.get("approved", False)
     reason = result.get("reason", "")
