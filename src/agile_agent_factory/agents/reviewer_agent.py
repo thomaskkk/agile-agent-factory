@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from agile_agent_factory.config import PRODUCT_ROOT, BLUEPRINT_PATH, REVIEWER_MODEL
-from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
+from agile_agent_factory.config import PRODUCT_ROOT, BLUEPRINT_PATH, REVIEWER_MODEL, bp_qa_criteria_path
+from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
 
@@ -12,14 +12,23 @@ MAX_REVIEW_FILE_CHARS = 8000      # generous per-file cap; small products are we
 MAX_REVIEW_TOTAL_CHARS = 50000    # overall prompt budget for the files block
 
 
-def review_patch(jira: JiraClient, story_keys: list[str]) -> dict:
+def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None) -> dict:
     for key in story_keys:
         try:
             jira.transition_issue(key, "In Code Review")
         except ValueError as e:
             log(str(e))
 
-    blueprint = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+    if story_criteria:
+        dod_section = "\n".join(story_criteria)
+    elif story_key:
+        qa_path = bp_qa_criteria_path(story_key)
+        if qa_path.exists():
+            dod_section = qa_path.read_text()
+        else:
+            dod_section = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+    else:
+        dod_section = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
 
     # Known binary/noise extensions to skip — everything else is attempted as UTF-8 text.
     _BINARY_EXTENSIONS = {
@@ -77,8 +86,8 @@ You are shown the COMPLETE contents of all generated files below — Python sour
 HTML templates, CSS, and JS. Do not assume any file type is missing unless it is
 absent from the list. Judge functional correctness and DoD coverage only.
 
-Blueprint (DoD summary):
-{blueprint[:8000]}
+Acceptance criteria (DoD):
+{dod_section[:8000]}
 
 Generated files:
 {files_block[:MAX_REVIEW_TOTAL_CHARS]}
@@ -99,11 +108,5 @@ Output ONLY valid JSON, nothing else:
                 log(str(e))
     else:
         log(f"Code review: REJECTED — {reason}")
-        for key in story_keys:
-            jira.add_comment_adf(key, make_adf_doc(f"Code review rejected:\n{reason}"))
-            try:
-                jira.transition_issue(key, "Development")
-            except ValueError as e:
-                log(str(e))
 
     return {"approved": approved, "reason": reason}
