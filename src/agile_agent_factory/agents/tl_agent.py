@@ -1,4 +1,5 @@
 import json
+import re
 
 from agile_agent_factory.config import (
     PRODUCT_ROOT, TL_MODEL,
@@ -241,6 +242,22 @@ def _write_story_task(
         )
         edge_block = "\n".join(f"- {e}" for e in tc_edge_cases) or "(none)"
 
+        # Derive allowed app file paths from target_imports
+        _allowed_app_files = []
+        for imp in tc_imports:
+            m = re.match(r"from (app(?:\.\w+)+) import", imp)
+            if m:
+                path_str = m.group(1).replace(".", "/") + ".py"
+                if path_str not in _allowed_app_files:
+                    _allowed_app_files.append(path_str)
+
+        _write_scope_lines = []
+        if tc_test_file:
+            _write_scope_lines.append(f"- `{tc_test_file}` (test file — create or overwrite)")
+        for p in _allowed_app_files:
+            _write_scope_lines.append(f"- `{p}` (derived from target imports)")
+        write_scope_block = "\n".join(_write_scope_lines) if _write_scope_lines else "- (no specific scope — follow architecture file contracts)"
+
         test_contract_section = f"""
 ## Test Contract
 **Test file:** `{tc_test_file}`
@@ -259,6 +276,15 @@ def _write_story_task(
 
 ### Edge Cases to Cover
 {edge_block}
+
+## Write Scope — Strictly Enforced
+You MUST write ONLY to the files listed below. Writing to any other file is FORBIDDEN.
+
+{write_scope_block}
+
+Do NOT touch `bootstrap.py`, routes, services, database singletons, shared infrastructure,
+or any file owned by another story. Modifying files outside this scope breaks existing
+passing tests and will trigger HITL intervention.
 """
 
     content = f"""# Task: {story_key}

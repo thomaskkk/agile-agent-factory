@@ -268,3 +268,8 @@ def test_blueprint_task_file_includes_test_contract_section(tmp_path, monkeypatc
     assert "test_login_with_valid_credentials" in content
     assert "from app.auth import login_user" in content
     assert "empty password string" in content
+    # Write scope section must be present and list only the allowed files
+    assert "## Write Scope" in content
+    assert "`tests/test_auth.py`" in content
+    assert "`app/auth.py`" in content
+    assert "FORBIDDEN" in content
