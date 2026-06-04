@@ -214,7 +214,7 @@ def test_qa_node_sets_refinement_qa_done_flag():
 
     jira = MagicMock()
     original = qa_agent.inject_gherkin_criteria
-    qa_agent.inject_gherkin_criteria = MagicMock(return_value={"F1-1": ["Scenario: do thing"]})
+    qa_agent.inject_gherkin_criteria = MagicMock(return_value=({"F1-1": ["Scenario: do thing"]}, {"F1-1": {}}))
     try:
         with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
             result = qa_node(state)
@@ -239,7 +239,7 @@ def test_qa_node_does_not_advance_column():
 
     jira = MagicMock()
     original = qa_agent.inject_gherkin_criteria
-    qa_agent.inject_gherkin_criteria = MagicMock(return_value={"F1-1": []})
+    qa_agent.inject_gherkin_criteria = MagicMock(return_value=({"F1-1": []}, {"F1-1": {}}))
     try:
         with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
             result = qa_node(state)
@@ -248,6 +248,30 @@ def test_qa_node_does_not_advance_column():
 
     story_update = result.get("stories", {}).get("F1-1", {})
     assert "column" not in story_update
+
+
+def test_qa_node_stores_test_contract_in_story_state():
+    """qa_node must store test_contract returned by inject_gherkin_criteria."""
+    from agile_agent_factory.nodes import qa_node
+    from agile_agent_factory.agents import qa_agent
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {"F1-1": {"story_key": "F1-1", "column": "refinement", "has_ui": False, "refinement_ux_done": True}},
+        "gherkin_criteria": {},
+    }
+    jira = MagicMock()
+    mock_tc = {"test_file": "tests/test_feature.py", "test_functions": ["test_do_thing"], "target_imports": ["from app.feature import do_thing"], "fixtures": [], "sample_data": [], "edge_cases": []}
+    original = qa_agent.inject_gherkin_criteria
+    qa_agent.inject_gherkin_criteria = MagicMock(return_value=({"F1-1": ["Scenario: do thing"]}, {"F1-1": mock_tc}))
+    try:
+        with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+            result = qa_node(state)
+    finally:
+        qa_agent.inject_gherkin_criteria = original
+
+    assert result["stories"]["F1-1"]["test_contract"] == mock_tc
+    assert result["stories"]["F1-1"]["refinement_qa_done"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -332,13 +332,14 @@ def qa_node(state: PipelineState) -> dict:
     log(f"QA: generating Gherkin criteria for {sk}.")
 
     try:
-        gherkin = inject_gherkin_criteria(jira, [sk])
+        gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
     except LLMQuotaExceeded as e:
         _notify_quota(jira, sk, e)
         interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
-        gherkin = inject_gherkin_criteria(jira, [sk])
+        gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
 
     criteria = gherkin.get(sk, [])
+    test_contract = test_contracts.get(sk, {})
 
     # Just set the flag — the dispatcher/refinement_gate handles column advancement
     # so parallel QA+UX dispatch doesn't race on the column field.
@@ -347,6 +348,7 @@ def qa_node(state: PipelineState) -> dict:
         "stories": {
             sk: {
                 "gherkin_criteria": criteria,
+                "test_contract": test_contract,
                 "refinement_qa_done": True,
             }
         },
@@ -704,6 +706,7 @@ def refinement_gate_node(state: PipelineState) -> dict:
         business_idea=state.get("business_idea", ""),
         acceptance_criteria=criteria,
         ux_spec=ux_spec,
+        test_contract=story.get("test_contract"),
     )
     errors = validate_ready_contract(contract)
 

@@ -235,3 +235,36 @@ def test_task_file_leads_with_active_story_contract_and_read_only_context(tmp_pa
     assert "Active story" in f1
     assert "Other story" not in f1
     assert "Architecture decisions" in f1
+
+
+def test_blueprint_task_file_includes_test_contract_section(tmp_path, monkeypatch):
+    """_write_story_task must write a '## Test Contract' section when ready_contract has test_contract."""
+    from agile_agent_factory.agents.tl_agent import _write_story_task
+
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
+
+    arch = {
+        "files": [{"path": "app/auth.py", "purpose": "auth module", "functions": ["login_user(username: str, password: str) -> dict"]}],
+        "import_rules": "from app.<module> import <name>",
+        "test_command": "uv run pytest ../tests/ -v",
+        "dependencies": [],
+    }
+    ready_contract = {
+        "test_contract": {
+            "test_file": "tests/test_auth.py",
+            "test_functions": ["test_login_with_valid_credentials"],
+            "target_imports": ["from app.auth import login_user"],
+            "fixtures": [{"name": "registered_user", "description": "A user in the system"}],
+            "sample_data": [{"username": "alice", "password": "correct_horse"}],
+            "edge_cases": ["empty password string"],
+        }
+    }
+
+    _write_story_task("F1-1", arch, {"F1-1": ["Scenario: Login\n  Given x\n  When y\n  Then z"]}, {}, ready_contract)
+
+    content = (tmp_path / "F1-1.md").read_text()
+    assert "## Test Contract" in content
+    assert "tests/test_auth.py" in content
+    assert "test_login_with_valid_credentials" in content
+    assert "from app.auth import login_user" in content
+    assert "empty password string" in content

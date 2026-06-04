@@ -219,6 +219,48 @@ def _write_story_task(
 
     ready_contract_block = json.dumps(ready_contract or {}, indent=2, sort_keys=True)
 
+    tc = (ready_contract or {}).get("test_contract", {})
+    test_contract_section = ""
+    if tc:
+        tc_test_file = tc.get("test_file", "")
+        tc_functions = tc.get("test_functions", [])
+        tc_imports = tc.get("target_imports", [])
+        tc_fixtures = tc.get("fixtures", [])
+        tc_sample_data = tc.get("sample_data", [])
+        tc_edge_cases = tc.get("edge_cases", [])
+
+        functions_block = "\n".join(f"- `{f}`" for f in tc_functions) or "(none)"
+        imports_block = "\n".join(f"- `{i}`" for i in tc_imports) or "(none)"
+        fixtures_block = (
+            "\n".join(f"- `{fix['name']}`: {fix.get('description', '')}" for fix in tc_fixtures if isinstance(fix, dict))
+            or "(none)"
+        )
+        sample_block = (
+            "\n".join(f"- `{json.dumps(d)}`" for d in tc_sample_data[:3])
+            or "(none)"
+        )
+        edge_block = "\n".join(f"- {e}" for e in tc_edge_cases) or "(none)"
+
+        test_contract_section = f"""
+## Test Contract
+**Test file:** `{tc_test_file}`
+
+### Expected Test Functions (implement these exactly)
+{functions_block}
+
+### Target Imports (these MUST be importable after your implementation)
+{imports_block}
+
+### Fixtures
+{fixtures_block}
+
+### Sample Data
+{sample_block}
+
+### Edge Cases to Cover
+{edge_block}
+"""
+
     content = f"""# Task: {story_key}
 
 ## Validated Definition of Ready Contract
@@ -228,7 +270,7 @@ def _write_story_task(
 
 ## Acceptance Criteria
 {criteria_block}
-{ux_flows_section}
+{ux_flows_section}{test_contract_section}
 ## Read-Only Shared Architecture Context
 
 ### File Contracts

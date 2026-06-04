@@ -57,3 +57,86 @@ def test_repairable_missing_acceptance_does_not_trigger_hitl():
     ])
     assert update["refinement_qa_done"] is False
     assert "hitl_type" not in update
+
+
+from agile_agent_factory.agents.ready_contract import build_ready_contract
+
+
+def _sample_tc():
+    return {
+        "test_file": "tests/test_auth.py",
+        "test_functions": ["test_login_valid", "test_login_invalid_password"],
+        "target_imports": ["from app.auth import login_user"],
+        "fixtures": [{"name": "registered_user", "description": "A user already in the system"}],
+        "sample_data": [{"username": "alice", "password": "correct_horse"}],
+        "edge_cases": ["empty password string", "non-existent username"],
+    }
+
+
+def test_test_contract_overrides_expected_tests():
+    """When test_contract is provided, expected_tests must come from test_functions, not Gherkin slugs."""
+    contract = build_ready_contract(
+        story_key="F1-1",
+        story={},
+        summary="User can log in",
+        business_idea="Auth system",
+        acceptance_criteria=["Scenario: Login success\n  Given valid creds\n  When login\n  Then success"],
+        test_contract=_sample_tc(),
+    )
+    assert contract["expected_tests"] == ["test_login_valid", "test_login_invalid_password"]
+    assert not any("f1_1" in t for t in contract["expected_tests"]), "Slug-based names must not appear when test_contract is provided"
+
+
+def test_test_contract_overrides_target_interfaces():
+    """When test_contract is provided, target_interfaces must come from target_imports + test_file."""
+    contract = build_ready_contract(
+        story_key="F1-1",
+        story={},
+        summary="User can log in",
+        business_idea="Auth system",
+        acceptance_criteria=["Scenario: Login\n  Given x\n  When y\n  Then z"],
+        test_contract=_sample_tc(),
+    )
+    assert "from app.auth import login_user" in contract["target_interfaces"]["imports"]
+    assert "tests/test_auth.py" in contract["target_interfaces"]["paths"]
+
+
+def test_test_contract_overrides_edge_cases():
+    """When test_contract.edge_cases is non-empty, those replace the Gherkin-extracted edge cases."""
+    contract = build_ready_contract(
+        story_key="F1-1",
+        story={},
+        summary="User can log in",
+        business_idea="Auth system",
+        acceptance_criteria=["Scenario: Login\n  Given x\n  When y\n  Then z"],
+        test_contract=_sample_tc(),
+    )
+    assert "empty password string" in contract["edge_cases"]
+    assert "non-existent username" in contract["edge_cases"]
+
+
+def test_test_contract_stored_verbatim_in_contract():
+    """The raw test_contract dict must be stored on the ready_contract for downstream consumers."""
+    tc = _sample_tc()
+    contract = build_ready_contract(
+        story_key="F1-1",
+        story={},
+        summary="User can log in",
+        business_idea="Auth system",
+        acceptance_criteria=["Scenario: Login\n  Given x\n  When y\n  Then z"],
+        test_contract=tc,
+    )
+    assert contract["test_contract"] == tc
+
+
+def test_build_ready_contract_without_test_contract_uses_slug_expected_tests():
+    """Absent test_contract, expected_tests must still be generated from Gherkin slugs (backward compat)."""
+    contract = build_ready_contract(
+        story_key="F1-1",
+        story={},
+        summary="User can log in",
+        business_idea="Auth system",
+        acceptance_criteria=["Scenario: Login success\n  Given valid creds\n  When login\n  Then success"],
+    )
+    assert any("f1_1" in t for t in contract["expected_tests"])
+    assert contract["test_contract"] == {}

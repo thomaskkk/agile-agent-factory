@@ -31,6 +31,7 @@ class StoryState(TypedDict, total=False):
     column: str  # backlog | refinement | tech_design | development | testing | code_review | done
     has_ui: bool
     gherkin_criteria: list
+    test_contract: dict
     refinement_qa_done: bool   # True once QA agent has processed this story
     refinement_ux_done: bool   # True once UX agent has processed this story (or has_ui=False)
     ux_spec: dict

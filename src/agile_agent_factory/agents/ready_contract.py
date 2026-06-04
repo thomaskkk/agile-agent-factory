@@ -18,11 +18,26 @@ def build_ready_contract(
     business_idea: str,
     acceptance_criteria: list[str],
     ux_spec: dict[str, Any] | None = None,
+    test_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic per-story contract from existing refinement artifacts."""
     has_ui = bool(story.get("has_ui", False))
     criteria = [c for c in acceptance_criteria if isinstance(c, str) and c.strip()]
     ux_flow_reference = _ux_flow_reference(story_key, ux_spec or {}) if has_ui else None
+    tc = test_contract or {}
+
+    expected_tests = tc.get("test_functions") or _expected_tests(story_key, criteria)
+    edge_cases = tc.get("edge_cases") or _edge_cases_from_criteria(criteria)
+
+    tc_imports = [i for i in (tc.get("target_imports") or []) if isinstance(i, str) and i.strip()]
+    tc_test_file = tc.get("test_file", "")
+    if tc_imports or tc_test_file:
+        target_ifaces: dict[str, Any] = {
+            "paths": [tc_test_file] if tc_test_file else [],
+            "imports": tc_imports,
+        }
+    else:
+        target_ifaces = _target_interfaces(story)
 
     contract = {
         "story_key": story_key,
@@ -34,11 +49,12 @@ def build_ready_contract(
         ],
         "acceptance_criteria": criteria,
         "examples": _examples_from_criteria(criteria),
-        "edge_cases": _edge_cases_from_criteria(criteria),
-        "expected_tests": _expected_tests(story_key, criteria),
-        "target_interfaces": _target_interfaces(story),
+        "edge_cases": edge_cases,
+        "expected_tests": expected_tests,
+        "target_interfaces": target_ifaces,
         "has_ui": has_ui,
         "ui_flow_reference": ux_flow_reference,
+        "test_contract": tc,
         "open_questions": [],
     }
 

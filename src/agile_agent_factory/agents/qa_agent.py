@@ -3,11 +3,15 @@ from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, 
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
 
-_GHERKIN_FALLBACK = {"acceptance_criteria": []}
+_QA_FALLBACK = {"acceptance_criteria": [], "test_contract": {}}
 
 
-def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> dict[str, list[str]]:
+def inject_gherkin_criteria(
+    jira: JiraClient, story_keys: list[str]
+) -> tuple[dict[str, list[str]], dict[str, dict]]:
+    """Return (criteria_dict, test_contracts_dict) for the given stories."""
     all_criteria: dict[str, list[str]] = {}
+    all_test_contracts: dict[str, dict] = {}
 
     for story_key in story_keys:
         issue = jira._request("GET", f"issue/{story_key}?fields=summary,description")
@@ -16,25 +20,44 @@ def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> dict[str
         log(f"Generating Gherkin criteria for {story_key}: {summary}")
 
         system = (
-            "You are a QA engineer writing Gherkin acceptance criteria. "
-            "Each scenario must map 1-to-1 with a pytest test function using Given/When/Then. "
+            "You are a QA engineer writing Gherkin acceptance criteria and a precise test contract. "
+            "Each Gherkin scenario maps 1-to-1 with a pytest test function. "
+            "The test_contract must specify the exact test file path, function names, and import paths "
+            "so the developer knows exactly what to implement. "
             "Never reference ambiguous imports or shadow the app/ package. "
             "Return JSON only."
         )
-        prompt = f"""Write Gherkin acceptance criteria for this user story.
+        prompt = f"""Write Gherkin acceptance criteria and a structured test contract for this user story.
 Return JSON only:
 {{
   "acceptance_criteria": [
     "Scenario: <title>\\n  Given <context>\\n  When <action>\\n  Then <outcome>"
-  ]
+  ],
+  "test_contract": {{
+    "test_file": "tests/test_<feature>.py",
+    "test_functions": ["test_<behavior_1>", "test_<behavior_2>"],
+    "target_imports": ["from app.<module> import <symbol>"],
+    "fixtures": [{{"name": "<fixture_name>", "description": "<what it creates>"}}],
+    "sample_data": [{{"<field>": "<value>"}}],
+    "edge_cases": ["<edge case description>"]
+  }}
 }}
+
+Rules:
+- test_file must start with "tests/" and end with ".py"
+- test_functions must be valid Python identifiers starting with "test_"
+- target_imports must use "from app.<module> import <name>" form only
+- sample_data is a list of concrete dicts (1–3 examples) usable as pytest parameters
 
 User story: {summary}
 """
-        result = call_llm_json(prompt, system=system, fallback=_GHERKIN_FALLBACK, model=QA_MODEL or None)
+        result = call_llm_json(prompt, system=system, fallback=_QA_FALLBACK, model=QA_MODEL or None)
         criteria = result.get("acceptance_criteria", [])
+        test_contract = result.get("test_contract") or {}
+
         all_criteria[story_key] = criteria
-        _write_qa_criteria(story_key, criteria)
+        all_test_contracts[story_key] = test_contract
+        _write_qa_criteria(story_key, criteria, test_contract)
 
         if criteria:
             existing_content = existing_description.get("content", []) if existing_description else []
@@ -46,13 +69,24 @@ User story: {summary}
             except ValueError as e:
                 log(str(e))
 
-    return all_criteria
+    return all_criteria, all_test_contracts
 
 
-def _write_qa_criteria(story_key: str, criteria: list[str]) -> None:
+def _write_qa_criteria(story_key: str, criteria: list[str], test_contract: dict) -> None:
     path = bp_qa_criteria_path(story_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     blocks = "\n\n".join(criteria) if criteria else "(no criteria generated)"
-    content = f"# QA Acceptance Criteria — {story_key}\n\n{blocks}\n"
+
+    tc_lines = ""
+    if test_contract:
+        tc_lines = (
+            "\n\n## Test Contract\n"
+            f"- **Test file:** `{test_contract.get('test_file', '')}`\n"
+            f"- **Test functions:** {', '.join(f'`{f}`' for f in test_contract.get('test_functions', []))}\n"
+            f"- **Target imports:** {', '.join(f'`{i}`' for i in test_contract.get('target_imports', []))}\n"
+            f"- **Edge cases:** {', '.join(test_contract.get('edge_cases', []))}\n"
+        )
+
+    content = f"# QA Acceptance Criteria — {story_key}\n\n{blocks}\n{tc_lines}"
     path.write_text(content)
     log(f"blueprint/context/qa_criteria/{story_key}.md written.")
