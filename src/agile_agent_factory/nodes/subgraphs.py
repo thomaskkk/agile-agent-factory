@@ -11,7 +11,7 @@ from typing import Annotated, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from agile_agent_factory.config import MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, BLUEPRINT_PATH, PRODUCT_ROOT
+from agile_agent_factory.config import MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, PRODUCT_ROOT
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_bullet_list, make_adf_doc, make_adf_heading
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.nodes.pipeline import (

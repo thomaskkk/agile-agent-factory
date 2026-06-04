@@ -92,14 +92,16 @@ Never bypass this function when writing files from LLM output.
 
 ## Testing
 
-Factory tests live in `agile-agent-factory/tests/`. They cover (112 tests total):
+Factory tests live in `agile-agent-factory/tests/`. They cover (144 tests total):
 - `path_utils` — 8 tests (path normalization and traversal rejection)
-- `llm_client` — 15 tests (mocked Anthropic + Gemini, JSON parsing, quota propagation, exponential backoff retry, network-error handling)
+- `llm_client` — 23 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, network-error handling)
 - `jira_client` — 17 tests (mocked HTTP via `responses` library, subtask type discovery, `append_adf_doc`, `update_issue_description`, DRY_RUN-early skip)
 - `pytest_runner` — 5 tests (PYTHONPATH injection, exit codes, `--with` extra-package flags)
-- `po_agent` — 3 tests (idempotency guard, issue creation, hitl_feedback injection)
-- `tl_agent` — 3 tests (architecture caching on resume, subtask idempotency, fresh LLM call + persistence)
-- `ux_agent` — 5 tests (validated spec, Jira description append, quota propagation, unknown ui_type/technology rejection)
+- `po_agent` — 4 tests (idempotency guard, issue creation, hitl_feedback injection)
+- `tl_agent` — 5 tests (architecture caching on resume, subtask idempotency, fresh LLM call + persistence)
+- `qa_agent` — 2 tests
+- `ux_agent` — 7 tests (validated spec, Jira description append, quota propagation, unknown ui_type/technology rejection)
+- `reviewer_agent` — 6 tests
 - `dependencies` — 6 tests (import scan, package aliases, unparseable file skip, 3-signal union, Flask recovery)
 - `aider_client` — 5 tests (is_available guards, subprocess args, failure exit code)
 - `readme_agent` — 2 tests
@@ -111,7 +113,7 @@ PYTHONPATH for product tests is injected by `src/agile_agent_factory/tools/pytes
 ## Key invariants
 
 - `pipeline_checkpoint.db` is the single source of truth — LangGraph's `SqliteSaver` manages it; never write state directly
-- `handoff_blueprint.md` is regenerated every upstream run — never commit it (it's gitignored)
+- `blueprint/` is regenerated every upstream run — never commit it (it's gitignored)
 - `review_retries` in StoryState caps rework cycles at `MAX_REVIEW_RETRIES = 2`. Rejection keeps the story in `code_review` with `review_status="rework_needed"`; dev reworks in-place. At exhaustion, HITL fires (no force-accept). After resume, `review_retries` resets to 0.
 - A story's `column` only ever advances forward: `refinement → tech_design → development → testing → code_review → done`. `review_status` sub-state (`"pending_review"` / `"rework_needed"`) drives rework routing without backward column movement.
 - `dev_node` skips all Jira transitions when `story.column == "code_review"` (rework path)

@@ -1,4 +1,4 @@
-from agile_agent_factory.config import PRODUCT_ROOT, BLUEPRINT_PATH, README_MODEL
+from agile_agent_factory.config import PRODUCT_ROOT, README_MODEL, BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS
 from agile_agent_factory.tools.llm_client import call_llm
 from agile_agent_factory.tools.logger import log
 
@@ -14,7 +14,11 @@ MAX_README_TOTAL_CHARS = 20000
 def generate_readme(state: dict) -> None:
     log("Generating README.md for product output.")
 
-    blueprint = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+    blueprint_parts = [
+        p.read_text() for p in (BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS)
+        if p.exists()
+    ]
+    blueprint = "\n\n".join(blueprint_parts)
     business_idea = BUSINESS_IDEA_PATH.read_text() if BUSINESS_IDEA_PATH.exists() else ""
     pyproject = PYPROJECT_PATH.read_text() if PYPROJECT_PATH.exists() else ""
 

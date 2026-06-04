@@ -7,11 +7,14 @@ def test_generate_readme_writes_file(tmp_path, monkeypatch):
     """generate_readme calls the LLM and writes the result to ../README.md."""
     import agile_agent_factory.agents.readme_agent as readme_agent
 
-    monkeypatch.setattr(readme_agent, "BLUEPRINT_PATH", tmp_path / "handoff_blueprint.md")
+    monkeypatch.setattr(readme_agent, "BP_BUSINESS_INTENT", tmp_path / "business_intent.md")
+    monkeypatch.setattr(readme_agent, "BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr(readme_agent, "BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
     monkeypatch.setattr(readme_agent, "PRODUCT_ROOT", tmp_path)
     monkeypatch.setattr(readme_agent, "README_PATH", tmp_path / "README.md")
 
-    (tmp_path / "handoff_blueprint.md").write_text("# Blueprint\nProduct: test product")
+    (tmp_path / "business_intent.md").write_text("# Business Intent\nProduct: test product")
+    (tmp_path / "decisions.md").write_text("# Architecture Decisions\nUse flask.")
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "tracker.py").write_text("def track(): pass")
 
@@ -28,11 +31,11 @@ def test_generate_readme_quota_propagates(tmp_path, monkeypatch):
     from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
     import agile_agent_factory.agents.readme_agent as readme_agent
 
-    monkeypatch.setattr(readme_agent, "BLUEPRINT_PATH", tmp_path / "handoff_blueprint.md")
+    monkeypatch.setattr(readme_agent, "BP_BUSINESS_INTENT", tmp_path / "business_intent.md")
+    monkeypatch.setattr(readme_agent, "BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr(readme_agent, "BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
     monkeypatch.setattr(readme_agent, "PRODUCT_ROOT", tmp_path)
     monkeypatch.setattr(readme_agent, "README_PATH", tmp_path / "README.md")
-
-    (tmp_path / "handoff_blueprint.md").write_text("# Blueprint")
 
     with patch("agile_agent_factory.agents.readme_agent.call_llm", side_effect=LLMQuotaExceeded("anthropic", "quota")):
         with pytest.raises(LLMQuotaExceeded):

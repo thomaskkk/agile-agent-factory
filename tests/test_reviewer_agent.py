@@ -30,9 +30,9 @@ def test_rejection_never_transitions_to_development(tmp_path):
     jira = _make_jira()
 
     with _patch_review(approved=False, reason="Missing edge-case tests"), \
-         patch("agile_agent_factory.agents.reviewer_agent.BLUEPRINT_PATH") as mock_bp, \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
-        mock_bp.exists.return_value = False
         # Create a dummy generated file so the agent doesn't short-circuit
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "main.py").write_text("print('hello')")
@@ -52,9 +52,9 @@ def test_rejection_does_not_add_comment(tmp_path):
     jira = _make_jira()
 
     with _patch_review(approved=False, reason="Bad code"), \
-         patch("agile_agent_factory.agents.reviewer_agent.BLUEPRINT_PATH") as mock_bp, \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
-        mock_bp.exists.return_value = False
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "main.py").write_text("x = 1")
 
@@ -71,9 +71,9 @@ def test_approval_transitions_to_qa(tmp_path):
     jira = _make_jira()
 
     with _patch_review(approved=True), \
-         patch("agile_agent_factory.agents.reviewer_agent.BLUEPRINT_PATH") as mock_bp, \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
-        mock_bp.exists.return_value = False
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "main.py").write_text("x = 1")
 
@@ -94,7 +94,7 @@ def test_approval_transitions_to_qa(tmp_path):
 
 def test_story_criteria_replaces_full_blueprint_in_prompt(tmp_path):
     """When story_criteria is provided, the LLM prompt must contain only those
-    criteria and must NOT include unrelated story criteria from the full blueprint."""
+    criteria and must NOT include unrelated story criteria."""
     jira = _make_jira()
 
     captured: list[str] = []
@@ -103,17 +103,18 @@ def test_story_criteria_replaces_full_blueprint_in_prompt(tmp_path):
         captured.append(prompt)
         return {"approved": True, "rejection_reason": ""}
 
-    blueprint_text = (
-        "**F3-417:**\nScenario: List recipes\n\n"
-        "**F3-418:**\nScenario: CRUD repository update/delete"
-    )
     story_criteria = ["Scenario: List recipes\n  Given I am a user\n  Then I see recipes"]
+    constraints_text = "**F3-418:**\nScenario: CRUD repository update/delete"
+
+    qa_dir = tmp_path / "qa_criteria"
+    qa_dir.mkdir()
+    constraints_file = tmp_path / "constraints.md"
+    constraints_file.write_text(constraints_text)
 
     with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
-         patch("agile_agent_factory.agents.reviewer_agent.BLUEPRINT_PATH") as mock_bp, \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", qa_dir), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", constraints_file), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
-        mock_bp.exists.return_value = True
-        mock_bp.read_text.return_value = blueprint_text
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "main.py").write_text("x = 1")
 
@@ -121,12 +122,12 @@ def test_story_criteria_replaces_full_blueprint_in_prompt(tmp_path):
 
     assert captured, "call_llm_json was never called"
     prompt = captured[0]
-    assert "F3-418" not in prompt, "Prompt must not include other stories' criteria"
+    assert "F3-418" not in prompt, "Prompt must not include constraints when story_criteria is provided"
     assert "List recipes" in prompt, "Prompt must include the active story's criteria"
 
 
-def test_review_patch_falls_back_to_blueprint_when_no_story_criteria(tmp_path):
-    """When story_criteria is omitted, the full blueprint is still used (backward compat)."""
+def test_review_patch_uses_all_criteria_when_no_story_key(tmp_path):
+    """When no story_key or story_criteria, reviewer assembles all qa_criteria files."""
     jira = _make_jira()
 
     captured: list[str] = []
@@ -135,20 +136,22 @@ def test_review_patch_falls_back_to_blueprint_when_no_story_criteria(tmp_path):
         captured.append(prompt)
         return {"approved": True, "rejection_reason": ""}
 
-    blueprint_text = "**F3-417:**\nScenario: List recipes\n\n**F3-418:**\nScenario: CRUD"
+    qa_dir = tmp_path / "qa_criteria"
+    qa_dir.mkdir()
+    (qa_dir / "F3-417.md").write_text("**F3-417:**\nScenario: List recipes")
+    (qa_dir / "F3-418.md").write_text("**F3-418:**\nScenario: CRUD")
 
     with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
-         patch("agile_agent_factory.agents.reviewer_agent.BLUEPRINT_PATH") as mock_bp, \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", qa_dir), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
-        mock_bp.exists.return_value = True
-        mock_bp.read_text.return_value = blueprint_text
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "main.py").write_text("x = 1")
 
-        reviewer_agent.review_patch(jira, ["F3-417"])  # no story_criteria
+        reviewer_agent.review_patch(jira, ["F3-417"])  # no story_criteria, no story_key
 
     assert captured, "call_llm_json was never called"
-    assert "F3-418" in captured[0], "Without story_criteria, full blueprint must appear in prompt"
+    assert "F3-418" in captured[0], "Without story_key, all qa_criteria files must appear in prompt"
 
 
 def test_uses_qa_criteria_file_when_no_story_criteria(tmp_path):
@@ -165,14 +168,10 @@ def test_uses_qa_criteria_file_when_no_story_criteria(tmp_path):
     qa_file = tmp_path / "F3-1.md"
     qa_file.write_text(qa_content)
 
-    blueprint_text = "full blueprint that should NOT appear"
-
     with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
-         patch("agile_agent_factory.agents.reviewer_agent.BLUEPRINT_PATH") as mock_bp, \
          patch("agile_agent_factory.agents.reviewer_agent.bp_qa_criteria_path", return_value=qa_file), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
-        mock_bp.exists.return_value = True
-        mock_bp.read_text.return_value = blueprint_text
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "main.py").write_text("x = 1")
 
@@ -181,4 +180,3 @@ def test_uses_qa_criteria_file_when_no_story_criteria(tmp_path):
     assert captured, "call_llm_json was never called"
     prompt = captured[0]
     assert "Check from file" in prompt, "Prompt must include QA criteria file content"
-    assert blueprint_text not in prompt, "Prompt must not fall back to full blueprint when QA file exists"

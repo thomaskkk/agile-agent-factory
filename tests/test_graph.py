@@ -288,10 +288,59 @@ def test_refinement_gate_advances_column_to_tech_design():
     state = {
         "active_story_key": "F1-1",
         "stories": {"F1-1": {"story_key": "F1-1", "column": "refinement",
-                              "refinement_qa_done": True, "refinement_ux_done": True}},
+                              "has_ui": False, "refinement_qa_done": True, "refinement_ux_done": True,
+                              "gherkin_criteria": ["Scenario: Do thing\n  Given X\n  When Y\n  Then Z"]}},
+        "business_idea": "Build a thing.",
     }
-    result = refinement_gate_node(state)
+    jira = MagicMock()
+    jira._request.return_value = {"fields": {"summary": "Do thing"}}
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+        result = refinement_gate_node(state)
     assert result["stories"]["F1-1"]["column"] == "tech_design"
+    assert result["stories"]["F1-1"]["ready_validated"] is True
+
+
+def test_refinement_gate_invalid_contract_keeps_story_in_refinement():
+    from agile_agent_factory.nodes import refinement_gate_node
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {"F1-1": {"story_key": "F1-1", "column": "refinement",
+                              "has_ui": False, "refinement_qa_done": True, "refinement_ux_done": True,
+                              "gherkin_criteria": []}},
+        "business_idea": "Build a thing.",
+    }
+    jira = MagicMock()
+    jira._request.return_value = {"fields": {"summary": "Do thing"}}
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+        result = refinement_gate_node(state)
+
+    update = result["stories"]["F1-1"]
+    assert "column" not in update
+    assert update["ready_validated"] is False
+    assert update["refinement_qa_done"] is False
+
+
+def test_refinement_gate_valid_ui_contract_advances_to_tech_design():
+    from agile_agent_factory.nodes import refinement_gate_node
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {"F1-1": {"story_key": "F1-1", "column": "refinement",
+                              "has_ui": True, "refinement_qa_done": True, "refinement_ux_done": True,
+                              "gherkin_criteria": ["Scenario: Submit form\n  Given a form\n  When I submit it\n  Then I see confirmation"],
+                              "ux_spec": {"ui_type": "web", "technology": "Flask", "screens_or_flows": [
+                                  {"story_key": "F1-1", "name": "Submit form", "purpose": "Collect input", "key_elements": ["submit"]}
+                              ]}}},
+        "business_idea": "Build a web form.",
+    }
+    jira = MagicMock()
+    jira._request.return_value = {"fields": {"summary": "Submit form"}}
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+        result = refinement_gate_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "tech_design"
+    assert result["stories"]["F1-1"]["ready_contract"]["ui_flow_reference"]["name"] == "Submit form"
 
 
 # ---------------------------------------------------------------------------
@@ -451,9 +500,7 @@ def test_dev_node_rework_path_stays_in_code_review():
 
     jira = MagicMock()
     with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
-         patch("agile_agent_factory.nodes.pipeline._generate_code_with_llm") as mock_gen, \
-         patch("agile_agent_factory.nodes.pipeline.BLUEPRINT_PATH") as mock_bp:
-        mock_bp.exists.return_value = False
+         patch("agile_agent_factory.nodes.pipeline._generate_code_with_llm") as mock_gen:
         result = dev_node(state)
 
     story_update = result["stories"]["F1-1"]

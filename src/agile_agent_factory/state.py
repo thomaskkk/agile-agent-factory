@@ -34,6 +34,9 @@ class StoryState(TypedDict, total=False):
     refinement_qa_done: bool   # True once QA agent has processed this story
     refinement_ux_done: bool   # True once UX agent has processed this story (or has_ui=False)
     ux_spec: dict
+    ready_contract: dict
+    ready_validation_errors: list[str]
+    ready_validated: bool
     architecture: dict
     subtasks: dict  # title → jira_key
     dependencies: list

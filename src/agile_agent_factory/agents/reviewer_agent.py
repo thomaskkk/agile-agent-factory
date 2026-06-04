@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agile_agent_factory.config import PRODUCT_ROOT, BLUEPRINT_PATH, REVIEWER_MODEL, bp_qa_criteria_path
+from agile_agent_factory.config import PRODUCT_ROOT, REVIEWER_MODEL, BP_ARCH_CONSTRAINTS, BP_QA_CRITERIA_DIR, bp_qa_criteria_path
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
@@ -26,9 +26,14 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
         if qa_path.exists():
             dod_section = qa_path.read_text()
         else:
-            dod_section = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+            dod_section = BP_ARCH_CONSTRAINTS.read_text() if BP_ARCH_CONSTRAINTS.exists() else ""
     else:
-        dod_section = BLUEPRINT_PATH.read_text() if BLUEPRINT_PATH.exists() else ""
+        # No story key: assemble all available qa_criteria files + constraints
+        parts = sorted(BP_QA_CRITERIA_DIR.glob("*.md")) if BP_QA_CRITERIA_DIR.exists() else []
+        sections = [p.read_text() for p in parts]
+        if BP_ARCH_CONSTRAINTS.exists():
+            sections.append(BP_ARCH_CONSTRAINTS.read_text())
+        dod_section = "\n\n".join(sections)
 
     # Known binary/noise extensions to skip — everything else is attempted as UTF-8 text.
     _BINARY_EXTENSIONS = {

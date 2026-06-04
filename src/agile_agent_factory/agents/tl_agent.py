@@ -1,5 +1,7 @@
+import json
+
 from agile_agent_factory.config import (
-    PRODUCT_ROOT, BLUEPRINT_PATH, TL_MODEL,
+    PRODUCT_ROOT, TL_MODEL,
     BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS, bp_task_path,
 )
 from agile_agent_factory.tools.dependencies import UX_TECH_TO_PACKAGE
@@ -38,6 +40,7 @@ def design_architecture(
     gherkin_criteria: dict[str, list[str]],
     ux_spec: dict,
     state: dict,
+    ready_contracts: dict[str, dict] | None = None,
 ) -> dict:
     all_upstream_keys = story_keys + state.get("epic_keys", [])
     _transition_all(jira, all_upstream_keys, "Tech Refinement")
@@ -69,6 +72,13 @@ UI/UX Design Specification:
   State Management: {ux_spec.get('state_management', '')}
 """
 
+    ready_contracts = ready_contracts or state.get("ready_contracts", {}) or {}
+    ready_contracts_block = json.dumps(
+        {key: ready_contracts.get(key, {}) for key in story_keys},
+        indent=2,
+        sort_keys=True,
+    )
+
     prompt = f"""Design the software architecture for this product.
 Return JSON only:
 {{
@@ -83,6 +93,9 @@ Return JSON only:
 }}
 
 Story keys: {story_keys}
+Validated Definition-of-Ready contracts (authoritative):
+{ready_contracts_block}
+
 Business idea:
 {idea}
 {ux_block}"""
@@ -109,10 +122,9 @@ Business idea:
             subtask_keys[subtask["title"]] = task["key"]
             log(f"Created Subtask: {task['key']} — {subtask['title']}")
 
-    _write_handoff_blueprint(idea, story_keys, gherkin_criteria, result, ux_spec)
     _write_architecture_files(result)
     for sk in story_keys:
-        _write_story_task(sk, result, gherkin_criteria, ux_spec)
+        _write_story_task(sk, result, gherkin_criteria, ux_spec, ready_contracts.get(sk, {}))
     _transition_all(jira, all_upstream_keys, "To Development")
     dependencies = [d for d in result.get("dependencies", []) if isinstance(d, str) and d.strip()]
     # The LLM sometimes omits dependencies entirely — seed the UX technology so an
@@ -129,95 +141,6 @@ Business idea:
         "architecture": result,
     }
 
-
-def _write_handoff_blueprint(
-    idea: str,
-    story_keys: list[str],
-    gherkin_criteria: dict[str, list[str]],
-    arch: dict,
-    ux_spec: dict,
-) -> None:
-    log(f"Writing handoff_blueprint.md.")
-
-    files_section = "\n".join(
-        f"- `{f['path']}`: {f.get('purpose', '')} | Functions: {', '.join(f.get('functions', []))}"
-        for f in arch.get("files", [])
-    )
-    criteria_section = "\n\n".join(
-        f"**{key}:**\n" + "\n".join(gherkin_criteria.get(key, ["(no criteria)"]))
-        for key in story_keys
-    )
-    expected_files = "\n".join(f"- `{f['path']}`" for f in arch.get("files", []))
-
-    deps = [d for d in arch.get("dependencies", []) if isinstance(d, str) and d.strip()]
-    deps_section = ""
-    if deps:
-        deps_section = "\n## Third-Party Dependencies\n" + "\n".join(f"- `{d}`" for d in deps) + "\n"
-
-    ux_section = ""
-    if ux_spec and ux_spec.get("ui_type", "none") != "none":
-        decisions_md = "\n".join(f"- {d}" for d in ux_spec.get("design_decisions", []))
-        flows_md = "\n".join(
-            f"- **{f.get('name', '')}** ({f.get('story_key', '')}): {f.get('purpose', '')}"
-            for f in ux_spec.get("screens_or_flows", [])
-        )
-        ux_section = f"""
-## UI/UX Design Specification
-**Type:** {ux_spec.get('ui_type')} | **Technology:** {ux_spec.get('technology')}
-**Description:** {ux_spec.get('description', '')}
-
-### Screens / Flows
-{flows_md}
-
-### State Management
-{ux_spec.get('state_management', '')}
-
-### Design Decisions
-{decisions_md}
-"""
-
-    content = f"""# Handoff Blueprint
-
-## Product Summary
-{idea[:800]}
-
-## User Stories
-{chr(10).join(f'- {k}' for k in story_keys)}
-
-## Gherkin Acceptance Criteria
-{criteria_section}
-{ux_section}
-## Architecture: File Contracts
-{files_section}
-
-## Import Rules
-{arch.get('import_rules', 'Use `from app.<module> import <name>` from the product root.')}
-
-## Permitted Target Directories
-- `../app/` — all production source code
-- `../tests/` — all test code
-
-## Test Command
-```bash
-{arch.get('test_command', 'uv run pytest ../tests/ -v')}
-```
-{deps_section}
-
-## Python Import Rules
-All imports resolve from the product root: `from app.<module> import <name>`.
-PYTHONPATH is set to the product root before running pytest.
-
-## Expected Output Files
-{expected_files}
-
-## Definition of Done
-- All pytest tests pass with exit code 0
-- No absolute paths in any generated file
-- All imports use `app.*` from the product root
-- No nested `app/app/` or `tests/tests/` directories
-"""
-    BLUEPRINT_PATH.write_text(content)
-    log(f"handoff_blueprint.md written to {BLUEPRINT_PATH}.")
 
 
 def _write_architecture_files(arch: dict) -> None:
@@ -268,6 +191,7 @@ def _write_story_task(
     arch: dict,
     gherkin_criteria: dict[str, list[str]],
     ux_spec: dict,
+    ready_contract: dict | None = None,
 ) -> None:
     path = bp_task_path(story_key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -293,23 +217,32 @@ def _write_story_task(
             )
             ux_flows_section = f"\n## UX Flows (this story)\n{flows_md}\n"
 
+    ready_contract_block = json.dumps(ready_contract or {}, indent=2, sort_keys=True)
+
     content = f"""# Task: {story_key}
+
+## Validated Definition of Ready Contract
+```json
+{ready_contract_block}
+```
 
 ## Acceptance Criteria
 {criteria_block}
 {ux_flows_section}
-## File Contracts
+## Read-Only Shared Architecture Context
+
+### File Contracts
 {files_section}
 
-## Import Rules
+### Import Rules
 {arch.get('import_rules', 'Use `from app.<module> import <name>` from the product root.')}
 
-## Test Command
+### Test Command
 ```bash
 {arch.get('test_command', 'uv run pytest ../tests/ -v')}
 ```
 
-## Definition of Done
+### Definition of Done
 - All pytest tests pass with exit code 0
 - No absolute paths in any generated file
 - All imports use `app.*` from the product root

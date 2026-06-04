@@ -41,6 +41,10 @@ An autonomous "Dark Factory" software development pipeline. Given a business ide
 agile-agent-factory/        ← this repo (the factory)
 ├── main.py                 ← entry point: LangGraph compile/resume, HITL Command(resume=) dispatch
 ├── pyproject.toml          ← hatchling src layout; pytest pythonpath = ["src"]
+├── blueprint/              ← layered handoff blueprint (generated; gitignored)
+│   ├── context/            ← business_intent.md, ux_decisions.md, qa_criteria/<story>.md
+│   ├── architecture/       ← decisions.md, constraints.md
+│   └── tasks/              ← per-story task files (<story_key>.md)
 ├── src/
 │   └── agile_agent_factory/
 │       ├── config.py       ← env var loader + PRODUCT_ROOT, CHECKPOINT_DB, BLUEPRINT_PATH
@@ -58,7 +62,7 @@ agile-agent-factory/        ← this repo (the factory)
 │       │   ├── po_agent.py         ← Jira epic/story provisioning, has_ui detection, upstream HITL
 │       │   ├── qa_agent.py         ← Gherkin acceptance criteria per story
 │       │   ├── ux_agent.py         ← UI/UX design spec (cli/web/tui), appends to Jira stories
-│       │   ├── tl_agent.py         ← architecture design, dependency collection, subtasks, handoff_blueprint.md
+│       │   ├── tl_agent.py         ← architecture design, dependency collection, subtasks, blueprint/ files
 │       │   ├── reviewer_agent.py   ← DoD audit via LLM
 │       │   ├── readme_agent.py     ← README generation from blueprint + product code scan
 │       │   └── sre_agent.py        ← emulated CI/CD report, Jira Done transition
@@ -125,7 +129,7 @@ All settings live in `.env`. Key variables:
 | `MAX_REVIEW_RETRIES` | `2` | code-review rejection retries per story before HITL pause |
 | `MAX_CORRECTION_FAILURES` | `2` | correction-loop zero-file failures before HITL (does not consume `MAX_RETRIES_DEV` budget) |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Anthropic model ID |
-| `OPENAI_MODEL` | `gpt-4o` | OpenAI model ID (fallback) |
+| `OPENAI_MODEL` | `gpt-5.4` | OpenAI model ID (fallback) |
 | `OPENAI_API_KEY` | — | Required only if Anthropic calls fail |
 | `LLM_PRIMARY_PROVIDER` | `anthropic` | Primary LLM provider (`anthropic` or `openai`) |
 | `LLM_TIMEOUT_SECONDS` | `120` | Per-call LLM timeout; raise if you see repeated timeouts on large codegen |
@@ -137,7 +141,11 @@ All settings live in `.env`. Key variables:
 | `WIP_LIMIT_DEVELOPMENT` | `2` | Max stories in the development column simultaneously |
 | `WIP_LIMIT_TESTING` | `2` | Max stories in the testing column simultaneously |
 | `WIP_LIMIT_CODE_REVIEW` | `1` | Max stories in the code review column simultaneously |
-| `PO_MODEL` / `QA_MODEL` / `UX_MODEL` / `TL_MODEL` / `DEV_MODEL` / `TEST_MODEL` / `REVIEWER_MODEL` / `README_MODEL` | — | Per-agent model override; blank = use `ANTHROPIC_MODEL` / `OPENAI_MODEL`. Provider auto-detected: `claude-*` → Anthropic, `gpt-*`/`o*-*` → OpenAI |
+| `PO_MODEL` / `TL_MODEL` / `DEV_MODEL` / `TEST_MODEL` / `REVIEWER_MODEL` | `claude-sonnet-4-6` | Per-agent model override (quality-critical steps). Provider auto-detected: `claude-*` → Anthropic, `gpt-*`/`o*-*` → OpenAI |
+| `QA_MODEL` / `UX_MODEL` / `README_MODEL` | `claude-haiku-4-5-20251001` | Per-agent model override (structured/low-risk steps). Blank falls through to `ANTHROPIC_MODEL` / `OPENAI_MODEL` |
+| `LANGCHAIN_TRACING_V2` | `true` | Enable LangSmith tracing |
+| `LANGCHAIN_API_KEY` | — | LangSmith API key (optional) |
+| `LANGCHAIN_PROJECT` | `agile-agent-factory` | LangSmith project name |
 
 ## State machine
 
@@ -169,4 +177,4 @@ cd agile-agent-factory
 uv run pytest tests/ -v
 ```
 
-117 tests covering `path_utils`, `llm_client` (20), `jira_client`, `pytest_runner`, `po_agent`, `tl_agent`, `ux_agent`, `dependencies`, `aider_client`, `readme_agent`, `dispatcher` (18), and `graph` (25).
+133 tests covering `path_utils` (8), `llm_client` (23), `jira_client` (17), `pytest_runner` (5), `po_agent` (4), `tl_agent` (5), `qa_agent` (2), `ux_agent` (7), `reviewer_agent` (6), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `dispatcher` (18), and `graph` (25).

@@ -7,7 +7,6 @@ load_dotenv()
 _REPO_ROOT = Path(__file__).parent.parent.parent   # agile_agent_factory/ → src/ → repo root
 PRODUCT_ROOT = _REPO_ROOT.parent                    # repo root → Factory_project_claude/
 CHECKPOINT_DB = _REPO_ROOT / "pipeline_checkpoint.db"
-BLUEPRINT_PATH = _REPO_ROOT / "handoff_blueprint.md"
 
 BLUEPRINT_DIR        = _REPO_ROOT / "blueprint"
 BP_CONTEXT_DIR       = BLUEPRINT_DIR / "context"

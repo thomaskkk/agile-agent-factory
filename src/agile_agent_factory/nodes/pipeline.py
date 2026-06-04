@@ -11,7 +11,7 @@ import json
 
 from agile_agent_factory.config import (
     MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, MAX_REVIEW_RETRIES,
-    PRODUCT_ROOT, BLUEPRINT_PATH,
+    PRODUCT_ROOT,
     DEV_MODEL, TEST_MODEL,
     bp_task_path,
 )
@@ -103,13 +103,18 @@ def _notify_quota(jira: JiraClient, issue_key: str | None, exc: LLMQuotaExceeded
     log(f"Quota exceeded ({provider}). Pipeline pausing for human intervention.")
 
 
+def _story_summary(jira: JiraClient, story_key: str) -> str:
+    try:
+        issue = jira._request("GET", f"issue/{story_key}?fields=summary")
+        return issue.get("fields", {}).get("summary", "") or ""
+    except Exception as e:
+        log(f"Could not fetch story summary for {story_key}: {e}")
+        return ""
+
+
 def _load_dev_context(story_key: str) -> str:
     task_path = bp_task_path(story_key)
-    if task_path.exists():
-        return task_path.read_text()
-    if BLUEPRINT_PATH.exists():
-        return BLUEPRINT_PATH.read_text()
-    return ""
+    return task_path.read_text() if task_path.exists() else ""
 
 
 def _write_generated_files(files: list) -> list[str]:
@@ -399,6 +404,11 @@ def tl_node(state: PipelineState) -> dict:
     story_keys = tech_stories
     gherkin = state.get("gherkin_criteria", {})
     ux_spec = state.get("ux_spec", {})
+    ready_contracts = {
+        sk: stories.get(sk, {}).get("ready_contract", {})
+        for sk in story_keys
+        if stories.get(sk, {}).get("ready_validated")
+    }
     log(f"TL: designing architecture for {story_keys}.")
 
     for ek in state.get("epic_keys", []):
@@ -408,12 +418,12 @@ def tl_node(state: PipelineState) -> dict:
     legacy["story_keys"] = story_keys
 
     try:
-        result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy)
+        result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
     except LLMQuotaExceeded as e:
         bk = story_keys[0] if story_keys else None
         _notify_quota(jira, bk, e)
         interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": bk})
-        result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy)
+        result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
 
     arch = result.get("architecture", {})
     subtasks = result.get("subtasks", {})
@@ -673,15 +683,45 @@ def review_node(state: PipelineState) -> dict:
 
 
 def refinement_gate_node(state: PipelineState) -> dict:
-    """Advance a story from refinement to tech_design once QA and UX are both done.
+    """Advance a story from refinement to tech_design once its ready contract is valid.
 
-    This is a zero-LLM pass-through that exists solely to set column="tech_design"
-    after the parallel qa/ux fan-out completes, avoiding a column-field race condition
-    where both qa_node and ux_node would each try to advance the column simultaneously.
+    This is a zero-LLM deterministic gate after the parallel qa/ux fan-out.
     """
-    sk, _ = _active_story(state)
-    log(f"Refinement gate: {sk} → tech_design.")
-    return {"stories": {sk: {"column": "tech_design"}}}
+    from agile_agent_factory.agents.ready_contract import (
+        build_ready_contract,
+        readiness_repair_update,
+        validate_ready_contract,
+    )
+
+    jira = JiraClient()
+    sk, story = _active_story(state)
+    criteria = story.get("gherkin_criteria", state.get("gherkin_criteria", {}).get(sk, []))
+    ux_spec = story.get("ux_spec") or state.get("ux_spec", {})
+    contract = build_ready_contract(
+        story_key=sk,
+        story=story,
+        summary=_story_summary(jira, sk),
+        business_idea=state.get("business_idea", ""),
+        acceptance_criteria=criteria,
+        ux_spec=ux_spec,
+    )
+    errors = validate_ready_contract(contract)
+
+    if errors:
+        log(f"Refinement gate: {sk} not ready; keeping in refinement: {errors}")
+        return {"stories": {sk: {"ready_contract": contract, **readiness_repair_update(errors)}}}
+
+    log(f"Refinement gate: {sk} ready → tech_design.")
+    return {
+        "stories": {
+            sk: {
+                "column": "tech_design",
+                "ready_contract": contract,
+                "ready_validation_errors": [],
+                "ready_validated": True,
+            }
+        }
+    }
 
 
 def finalize_node(state: PipelineState) -> dict:
