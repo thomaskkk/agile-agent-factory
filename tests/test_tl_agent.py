@@ -260,9 +260,9 @@ def test_blueprint_task_file_includes_test_contract_section(tmp_path, monkeypatc
         }
     }
 
-    _write_story_task("F1-1", arch, {"F1-1": ["Scenario: Login\n  Given x\n  When y\n  Then z"]}, {}, ready_contract)
+    _write_story_task("FAKE_STORY", arch, {"FAKE_STORY": ["Scenario: Login\n  Given x\n  When y\n  Then z"]}, {}, ready_contract)
 
-    content = (tmp_path / "F1-1.md").read_text()
+    content = (tmp_path / "FAKE_STORY.md").read_text()
     assert "## Test Contract" in content
     assert "tests/test_auth.py" in content
     assert "test_login_with_valid_credentials" in content
