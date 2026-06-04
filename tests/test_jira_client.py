@@ -1,0 +1,212 @@
+import pytest
+import responses as resp_lib
+
+
+@pytest.fixture(autouse=True)
+def patch_config(monkeypatch):
+    import agile_agent_factory.tools.jira_client as jira_client
+    monkeypatch.setattr(jira_client, "DRY_RUN", False)
+    monkeypatch.setattr(jira_client, "JIRA_BASE_URL", "https://test.atlassian.net")
+    monkeypatch.setattr(jira_client, "JIRA_PROJECT_KEY", "TEST")
+    monkeypatch.setattr(jira_client, "JIRA_FLAG_FIELD_ID", "customfield_10021")
+    monkeypatch.setattr(jira_client, "JIRA_FLAG_VALUE", "Impediment")
+
+
+@resp_lib.activate
+def test_search_jql_uses_post():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.POST,
+        "https://test.atlassian.net/rest/api/3/search/jql",
+        json={"issues": [{"key": "TEST-1"}]},
+        status=200,
+    )
+    client = jira_client.JiraClient()
+    result = client.search_jql("project = TEST")
+    assert result["issues"][0]["key"] == "TEST-1"
+
+
+@resp_lib.activate
+def test_create_issue():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.POST,
+        "https://test.atlassian.net/rest/api/3/issue",
+        json={"key": "TEST-2", "id": "100"},
+        status=201,
+    )
+    client = jira_client.JiraClient()
+    result = client.create_issue("My Story", "Story")
+    assert result["key"] == "TEST-2"
+
+
+@resp_lib.activate
+def test_transition_matches_destination_status():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.GET,
+        "https://test.atlassian.net/rest/api/3/issue/TEST-1/transitions",
+        json={"transitions": [
+            {"id": "21", "name": "Start Progress", "to": {"name": "In Progress"}}
+        ]},
+        status=200,
+    )
+    resp_lib.add(
+        resp_lib.POST,
+        "https://test.atlassian.net/rest/api/3/issue/TEST-1/transitions",
+        body=b"",
+        status=204,
+    )
+    client = jira_client.JiraClient()
+    client.transition_issue("TEST-1", "In Progress")  # match by destination status name
+
+
+@resp_lib.activate
+def test_transition_raises_with_available_list_when_not_found():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.GET,
+        "https://test.atlassian.net/rest/api/3/issue/TEST-1/transitions",
+        json={"transitions": [
+            {"id": "21", "name": "Start Progress", "to": {"name": "In Progress"}}
+        ]},
+        status=200,
+    )
+    client = jira_client.JiraClient()
+    with pytest.raises(ValueError, match="No Jira transition to 'Done' found"):
+        client.transition_issue("TEST-1", "Done")
+
+
+@resp_lib.activate
+def test_get_subtask_issue_type_returns_name_with_subtask_flag():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.GET,
+        "https://test.atlassian.net/rest/api/3/project/TEST",
+        json={
+            "issueTypes": [
+                {"name": "Story", "subtask": False},
+                {"name": "Bug", "subtask": False},
+                {"name": "Sub-task", "subtask": True},
+            ]
+        },
+        status=200,
+    )
+    client = jira_client.JiraClient()
+    assert client.get_subtask_issue_type() == "Sub-task"
+
+
+@resp_lib.activate
+def test_get_subtask_issue_type_raises_when_none_found():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.GET,
+        "https://test.atlassian.net/rest/api/3/project/TEST",
+        json={"issueTypes": [{"name": "Story", "subtask": False}]},
+        status=200,
+    )
+    client = jira_client.JiraClient()
+    with pytest.raises(ValueError, match="No subtask issue type"):
+        client.get_subtask_issue_type()
+
+
+def test_append_adf_doc_merges_content():
+    import agile_agent_factory.tools.jira_client as jira_client
+    existing = jira_client.make_adf_doc("Original description.")
+    result = jira_client.append_adf_doc(existing, "Acceptance Criteria:\n\nScenario: ...")
+    assert result["version"] == 1
+    assert len(result["content"]) == 2
+    assert result["content"][0]["content"][0]["text"] == "Original description."
+    assert "Acceptance Criteria" in result["content"][1]["content"][0]["text"]
+
+
+def test_append_adf_doc_empty_existing():
+    import agile_agent_factory.tools.jira_client as jira_client
+    result = jira_client.append_adf_doc({}, "Acceptance Criteria:\n\nScenario: ...")
+    assert len(result["content"]) == 1
+    assert "Acceptance Criteria" in result["content"][0]["content"][0]["text"]
+
+
+@resp_lib.activate
+def test_update_issue_description_calls_put():
+    import agile_agent_factory.tools.jira_client as jira_client
+    resp_lib.add(
+        resp_lib.PUT,
+        "https://test.atlassian.net/rest/api/3/issue/TEST-5",
+        body=b"",
+        status=204,
+    )
+    client = jira_client.JiraClient()
+    adf = jira_client.make_adf_doc("Full description with Gherkin appended.")
+    client.update_issue_description("TEST-5", adf)
+    assert len(resp_lib.calls) == 1
+    assert resp_lib.calls[0].request.method == "PUT"
+
+
+def test_update_issue_description_dry_run_skips(monkeypatch):
+    import agile_agent_factory.tools.jira_client as jira_client
+    monkeypatch.setattr(jira_client, "DRY_RUN", True)
+    client = jira_client.JiraClient()
+    adf = jira_client.make_adf_doc("Should not be sent.")
+    client.update_issue_description("TEST-5", adf)  # must not raise (no HTTP call)
+
+
+@resp_lib.activate
+def test_transition_issue_dry_run_skips_get_transitions(monkeypatch):
+    import agile_agent_factory.tools.jira_client as jira_client
+    monkeypatch.setattr(jira_client, "DRY_RUN", True)
+    client = jira_client.JiraClient()
+    client.transition_issue("TEST-9", "Development")
+    assert len(resp_lib.calls) == 0
+
+
+def test_make_adf_doc_structure():
+    import agile_agent_factory.tools.jira_client as jira_client
+    doc = jira_client.make_adf_doc("Hello world")
+    assert doc["version"] == 1
+    assert doc["type"] == "doc"
+    assert doc["content"][0]["content"][0]["text"] == "Hello world"
+
+
+def test_make_adf_mention_doc():
+    import agile_agent_factory.tools.jira_client as jira_client
+    doc = jira_client.make_adf_mention_doc("uid123", "Please review.")
+    para = doc["content"][0]["content"]
+    assert para[0]["type"] == "mention"
+    assert para[0]["attrs"]["id"] == "uid123"
+    assert "Please review" in para[1]["text"]
+
+
+def test_make_adf_heading_default_level():
+    import agile_agent_factory.tools.jira_client as jira_client
+    node = jira_client.make_adf_heading("Definition of Done")
+    assert node["type"] == "heading"
+    assert node["attrs"]["level"] == 3
+    assert node["content"][0]["text"] == "Definition of Done"
+
+
+def test_make_adf_heading_custom_level():
+    import agile_agent_factory.tools.jira_client as jira_client
+    node = jira_client.make_adf_heading("Summary", level=2)
+    assert node["attrs"]["level"] == 2
+
+
+def test_make_adf_bullet_list_simple_items():
+    import agile_agent_factory.tools.jira_client as jira_client
+    node = jira_client.make_adf_bullet_list(["Item A", "Item B"])
+    assert node["type"] == "bulletList"
+    assert len(node["content"]) == 2
+    first_item = node["content"][0]
+    assert first_item["type"] == "listItem"
+    assert first_item["content"][0]["content"][0]["text"] == "Item A"
+
+
+def test_make_adf_bullet_list_multiline_item_uses_hardbreak():
+    import agile_agent_factory.tools.jira_client as jira_client
+    node = jira_client.make_adf_bullet_list(["Scenario: Title\n  Given context\n  When action"])
+    inline = node["content"][0]["content"][0]["content"]
+    types = [n["type"] for n in inline]
+    assert "hardBreak" in types
+    texts = [n.get("text", "") for n in inline if n["type"] == "text"]
+    assert "Scenario: Title" in texts
+    assert "  Given context" in texts

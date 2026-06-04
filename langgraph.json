@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./src/agile_agent_factory/graph.py:build_graph"
+  },
+  "env": ".env"
+}
