@@ -532,7 +532,7 @@ def test_dev_node_rework_path_stays_in_code_review():
     assert story_update["review_rejection_reason"] == ""
     assert "column" not in story_update
     # No Jira transition to Development on rework path
-    transition_calls = [str(c) for c in jira.transition_issue.call_args_list]
+    transition_calls = [str(c) for c in jira.transition_to.call_args_list]
     assert not any("Development" in c for c in transition_calls)
 
 

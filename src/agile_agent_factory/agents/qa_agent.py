@@ -2,6 +2,7 @@ from agile_agent_factory.config import DRY_RUN, QA_MODEL, bp_qa_criteria_path
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 _QA_FALLBACK = {"acceptance_criteria": [], "test_contract": {}}
 
@@ -65,7 +66,7 @@ User story: {summary}
             new_description = {"version": 1, "type": "doc", "content": existing_content + criteria_nodes}
             jira.update_issue_description(story_key, new_description)
             try:
-                jira.transition_issue(story_key, "To Tech Refinement")
+                jira.transition_to(story_key, WorkflowState.TECH_REFINEMENT)
             except ValueError as e:
                 log(str(e))
 

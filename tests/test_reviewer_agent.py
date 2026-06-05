@@ -40,8 +40,8 @@ def test_rejection_never_transitions_to_development(tmp_path):
         result = reviewer_agent.review_patch(jira, ["F1-1", "F1-2"])
 
     assert result["approved"] is False
-    for call in jira.transition_issue.call_args_list:
-        target = call.args[1] if len(call.args) > 1 else call.kwargs.get("status", "")
+    for call in jira.transition_to.call_args_list:
+        target = call.args[1] if len(call.args) > 1 else call.kwargs.get("state", "")
         assert target != "Development", (
             f"review_patch must not transition to 'Development' on rejection, but got: {target}"
         )
@@ -81,8 +81,8 @@ def test_approval_transitions_to_qa(tmp_path):
 
     assert result["approved"] is True
     targets = [
-        (call.args[1] if len(call.args) > 1 else call.kwargs.get("status", ""))
-        for call in jira.transition_issue.call_args_list
+        (call.args[1] if len(call.args) > 1 else call.kwargs.get("state", ""))
+        for call in jira.transition_to.call_args_list
     ]
     assert "To QA" in targets
     assert "Development" not in targets

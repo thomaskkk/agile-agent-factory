@@ -7,6 +7,7 @@ from agile_agent_factory.config import (
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return valid JSON — manual review required."}
 
@@ -14,7 +15,7 @@ _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return v
 def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> dict:
     for key in story_keys:
         try:
-            jira.transition_issue(key, "In Code Review")
+            jira.transition_to(key, WorkflowState.IN_CODE_REVIEW)
         except ValueError as e:
             log(str(e))
 
@@ -140,7 +141,7 @@ Output ONLY valid JSON, nothing else:
         log("Code review: APPROVED.")
         for key in story_keys:
             try:
-                jira.transition_issue(key, "To QA")
+                jira.transition_to(key, WorkflowState.TO_QA)
             except ValueError as e:
                 log(str(e))
     else:

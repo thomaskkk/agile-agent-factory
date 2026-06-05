@@ -2,6 +2,7 @@ from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, PO_M
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_mention_doc, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
 
@@ -85,7 +86,7 @@ Business idea to analyze:
         epic_keys.append(epic_key)
         log(f"Created Epic: {epic_key} — {epic_data['title']}")
         try:
-            jira.transition_issue(epic_key, "Business Refinement")
+            jira.transition_to(epic_key, WorkflowState.BUSINESS_REFINEMENT)
         except ValueError as e:
             log(str(e))
 
@@ -107,7 +108,7 @@ Business idea to analyze:
             story_to_epic[story["key"]] = epic_key
             log(f"Created Story: {story['key']} — {story_data['title']}")
             try:
-                jira.transition_issue(story["key"], "Business Refinement")
+                jira.transition_to(story["key"], WorkflowState.BUSINESS_REFINEMENT)
             except ValueError as e:
                 log(str(e))
 

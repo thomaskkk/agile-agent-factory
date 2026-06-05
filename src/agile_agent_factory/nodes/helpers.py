@@ -11,6 +11,7 @@ from langgraph.types import interrupt
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 
 
@@ -25,9 +26,9 @@ def _active_story(state: PipelineState) -> tuple[str, dict]:
     return sk, story
 
 
-def _safe_transition(jira: JiraClient, key: str, target: str) -> None:
+def _safe_transition(jira: JiraClient, key: str, target: WorkflowState) -> None:
     try:
-        jira.transition_issue(key, target)
+        jira.transition_to(key, target)
     except ValueError as e:
         log(str(e))
 

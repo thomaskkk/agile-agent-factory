@@ -8,6 +8,7 @@ from agile_agent_factory.config import MAX_REVIEW_RETRIES
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_heading
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
 
@@ -23,7 +24,7 @@ def review_node(state: PipelineState) -> dict:
     log(f"Review: auditing code for {sk}.")
 
     for ek in state.get("epic_keys", []):
-        _safe_transition(jira, ek, "In Code Review")
+        _safe_transition(jira, ek, WorkflowState.IN_CODE_REVIEW)
 
     story_criteria = state.get("gherkin_criteria", {}).get(sk, [])
 
@@ -98,7 +99,7 @@ def review_node(state: PipelineState) -> dict:
     log(f"Code review: APPROVED for {sk}.")
 
     for ek in state.get("epic_keys", []):
-        _safe_transition(jira, ek, "To QA")
+        _safe_transition(jira, ek, WorkflowState.TO_QA)
 
     return {
         "review_approved": True,

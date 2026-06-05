@@ -9,6 +9,7 @@ from agile_agent_factory.tools.dependencies import UX_TECH_TO_PACKAGE
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
 
@@ -27,10 +28,10 @@ _ARCH_FALLBACK = {
 }
 
 
-def _transition_all(jira: JiraClient, keys: list[str], target: str) -> None:
+def _transition_all(jira: JiraClient, keys: list[str], target: WorkflowState) -> None:
     for key in keys:
         try:
-            jira.transition_issue(key, target)
+            jira.transition_to(key, target)
         except ValueError as e:
             log(str(e))
 
@@ -44,7 +45,7 @@ def design_architecture(
     ready_contracts: dict[str, dict] | None = None,
 ) -> dict:
     all_upstream_keys = story_keys + state.get("epic_keys", [])
-    _transition_all(jira, all_upstream_keys, "Tech Refinement")
+    _transition_all(jira, all_upstream_keys, WorkflowState.TECH_REFINEMENT)
 
     idea = BUSINESS_IDEA_PATH.read_text()
 
@@ -126,7 +127,7 @@ Business idea:
     _write_architecture_files(result)
     for sk in story_keys:
         _write_story_task(sk, result, gherkin_criteria, ux_spec, ready_contracts.get(sk, {}))
-    _transition_all(jira, all_upstream_keys, "To Development")
+    _transition_all(jira, all_upstream_keys, WorkflowState.TO_DEVELOPMENT)
     dependencies = [d for d in result.get("dependencies", []) if isinstance(d, str) and d.strip()]
     # The LLM sometimes omits dependencies entirely — seed the UX technology so an
     # obvious framework (e.g. Flask) is never lost. The downstream test-time scan is

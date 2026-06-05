@@ -15,6 +15,7 @@ from agile_agent_factory.config import PRODUCT_ROOT, WIP_LIMITS
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import (
     _story_keys, _active_story, _safe_transition, _to_legacy_state,
@@ -182,7 +183,7 @@ def tl_node(state: PipelineState) -> dict:
     log(f"TL: designing architecture for {story_keys}.")
 
     for ek in state.get("epic_keys", []):
-        _safe_transition(jira, ek, "To Tech Refinement")
+        _safe_transition(jira, ek, WorkflowState.TECH_REFINEMENT)
 
     legacy = _to_legacy_state(state)
     legacy["story_keys"] = story_keys
