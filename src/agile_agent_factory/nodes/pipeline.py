@@ -14,6 +14,7 @@ from agile_agent_factory.config import (
     MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, MAX_REVIEW_RETRIES,
     PRODUCT_ROOT,
     DEV_MODEL, TEST_MODEL,
+    WIP_LIMITS,
     bp_task_path,
 )
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_bullet_list, make_adf_doc, make_adf_heading
@@ -23,14 +24,6 @@ from agile_agent_factory.tools.path_utils import normalize_generated_path
 from agile_agent_factory.tools.dependencies import resolve_dependencies
 from agile_agent_factory.tools.pytest_runner import run_pytest
 from agile_agent_factory.state import PipelineState
-
-DEFAULT_WIP_LIMITS = {
-    "refinement": 3,
-    "tech_design": 2,
-    "development": 2,
-    "testing": 2,
-    "code_review": 1,
-}
 
 _FILE_FALLBACK = [
     {"path": "app/__init__.py", "content": ""},
@@ -255,7 +248,7 @@ def init_node(state: PipelineState) -> dict:
         raise FileNotFoundError(f"business_idea.md not found at {business_idea_path}")
     return {
         "business_idea": business_idea_path.read_text(),
-        "wip_limits": state.get("wip_limits") or DEFAULT_WIP_LIMITS,
+        "wip_limits": state.get("wip_limits") or WIP_LIMITS,
         "review_retries": 0,
         "review_approved": False,
         "done_count": 0,

@@ -69,9 +69,12 @@ MAX_CORRECTION_FAILURES = int(os.environ.get("MAX_CORRECTION_FAILURES", "2"))
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 UV_BIN = os.environ.get("UV_BIN", "uv")
 
-# Kanban WIP limits (Phase 3+)
-WIP_LIMIT_REFINEMENT = int(os.environ.get("WIP_LIMIT_REFINEMENT", "3"))
-WIP_LIMIT_TECH_DESIGN = int(os.environ.get("WIP_LIMIT_TECH_DESIGN", "2"))
-WIP_LIMIT_DEVELOPMENT = int(os.environ.get("WIP_LIMIT_DEVELOPMENT", "2"))
-WIP_LIMIT_TESTING = int(os.environ.get("WIP_LIMIT_TESTING", "2"))
-WIP_LIMIT_CODE_REVIEW = int(os.environ.get("WIP_LIMIT_CODE_REVIEW", "1"))
+# Kanban WIP limits (Phase 3+). Single source of truth — the dispatcher reads
+# state["wip_limits"], seeded from this dict in pipeline.init_node.
+WIP_LIMITS = {
+    "refinement": int(os.environ.get("WIP_LIMIT_REFINEMENT", "3")),
+    "tech_design": int(os.environ.get("WIP_LIMIT_TECH_DESIGN", "2")),
+    "development": int(os.environ.get("WIP_LIMIT_DEVELOPMENT", "2")),
+    "testing": int(os.environ.get("WIP_LIMIT_TESTING", "2")),
+    "code_review": int(os.environ.get("WIP_LIMIT_CODE_REVIEW", "1")),
+}
