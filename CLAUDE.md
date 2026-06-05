@@ -41,6 +41,11 @@ LangGraph `StateGraph` with a kanban dispatcher for story-level parallelism:
 - **Graph**: `src/agile_agent_factory/graph.py` — `init → po → dispatcher → [qa | ux | refinement_gate | tl | dev | test | review] → dispatcher (loop) → finalize → END`
 - **Dispatcher**: `src/agile_agent_factory/nodes/dispatcher.py` — deterministic routing. Scans columns right-to-left (`code_review → testing → development → tech_design → refinement`), respects WIP limits, emits `Send()` commands. TL is dispatched as a batch (one `Send` for all `tech_design` stories); all other agents are per-story.
 - **Nodes**: each wraps an existing agent, returns a partial dict (LangGraph merges via reducers), and never calls `update_state()`. `nodes/pipeline.py` holds only the lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize); `nodes/dev_node.py`, `nodes/test_node.py`, and `nodes/review_node.py` hold dev/test/review respectively; shared helpers (incl. `raise_quota_interrupt`) live in `nodes/helpers.py`. `nodes/__init__.py` re-exports every node as the stable surface `graph.py` imports.
+- **Agent abstraction layers** (added by the architectural-layering refactor):
+  - **`tools/workflow.py` — `WorkflowState` enum**: the single source of truth for every Jira transition target. Agents/nodes call `jira.transition_to(key, WorkflowState.X)` (or `_safe_transition` / `JiraFacade.move_all`), never a transition string literal. Consolidates the old QA `"To Tech Refinement"` / TL `"Tech Refinement"` drift onto `TECH_REFINEMENT`.
+  - **`tools/jira_facade.py` — `JiraFacade`**: thin domain adapter over `JiraClient` (`advance`, `move_all`, `flag_for_human`, `post_section`). Used by sre/po/reviewer; qa/ux still write descriptions directly via `update_issue_description` (no facade match).
+  - **`tools/llm_adapters/<agent>.py`**: each agent's prompt + system text live in a dedicated adapter with a pure `build_*_prompt(...)` builder and a thin `generate_*(...)` caller. No agent entrypoint calls `call_llm_json`/`call_llm` directly.
+  - **`agents/contract.py` — `AgentResult`**: every agent entrypoint returns `AgentResult(success, payload, errors)`; nodes unpack `result.payload` (and `result.success` for the reviewer verdict). Input signatures are intentionally NOT unified (no `AgentContext`). Quota still raises `LLMQuotaExceeded` — never folded into `AgentResult.errors`.
 - **HITL**: `langgraph.types.interrupt()` suspends execution; `Command(resume=feedback)` resumes. Three interrupt types: `refinement` (PO ambiguity), `intervention` (pytest retry exhaustion), `quota` (LLM rate-limit).
 
 ### Kanban Column Flow
@@ -86,14 +91,18 @@ Never bypass this function when writing files from LLM output.
 
 - All searches use `POST /rest/api/3/search/jql` (never GET search)
 - All comments use ADF format (never plain text)
-- Transitions are discovered dynamically — never hardcode transition IDs
+- Transitions are discovered dynamically — never hardcode transition IDs. Targets come from the `WorkflowState` enum (`tools/workflow.py`) via `jira.transition_to(...)`; never pass a raw transition string
 - `transition_issue` checks `DRY_RUN` at the top before calling `get_transitions` — no HTTP GET fires in dry-run mode
 - Every write method checks `DRY_RUN` and logs `[DRY_RUN]` prefix when skipped
 
 ## Testing
 
-Factory tests live in `agile-agent-factory/tests/`. They cover (161 tests total):
+Factory tests live in `agile-agent-factory/tests/`. They cover (180 tests total):
 - `config` — 3 tests (WIP_LIMITS env override + defaults, reviewer/readme budget constants)
+- `workflow` — 2 tests (WorkflowState enum values, uniqueness)
+- `jira_facade` — 5 tests (advance/move_all delegation, error swallowing, flag_for_human, post_section)
+- `llm_adapters` — 10 tests (per-agent prompt builders include their inputs)
+- `agent_contract` — 2 tests (AgentResult defaults, payload/errors)
 - `path_utils` — 10 tests (path normalization and traversal rejection)
 - `llm_client` — 23 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, network-error handling)
 - `jira_client` — 17 tests (mocked HTTP via `responses` library, subtask type discovery, `append_adf_doc`, `update_issue_description`, DRY_RUN-early skip)
