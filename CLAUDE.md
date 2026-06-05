@@ -133,6 +133,10 @@ PYTHONPATH for product tests is injected by `src/agile_agent_factory/tools/pytes
 - TL task files (`blueprint/tasks/<story_key>.md`) include a **write-scope section** derived from the story's `test_contract` — it lists the exact files the dev agent is allowed to create/overwrite; the reviewer enforces the same scope via `write_scope` passed to `review_patch()`
 - `StoryState` new fields: `test_contract` (dict — expected test names and target interfaces, set by QA), `ready_contract` (dict — full DoR snapshot), `ready_validation_errors` (list[str]), `ready_validated` (bool)
 
+## Local-only files
+
+- `PRD.md` — product requirements document; gitignored, never commit it. Edit locally to evolve requirements.
+
 ## Known issues (not yet fixed)
 
 - (none currently tracked)
