@@ -1,7 +1,7 @@
-from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, PO_MODEL, BP_BUSINESS_INTENT
+from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, BP_BUSINESS_INTENT
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_mention_doc, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.jira_facade import JiraFacade
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.llm_adapters.po import analyze_business
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
 
@@ -29,46 +29,8 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> dict:
 
     idea = read_business_idea()
 
-    system = (
-        "You are a Product Owner in an Agile team. "
-        "Analyze the business requirements for logical contradictions, missing mandatory data, "
-        "or unfeasible scope. Then define Epics and User Stories with a Definition of Done. "
-        "Set has_ui to true if the product needs any user-facing interface (CLI with commands, "
-        "web UI, TUI, desktop app). Set it to false for pure library modules imported by other code. "
-        "Respond ONLY with valid JSON matching the exact schema below."
-    )
     hitl_feedback = state.get("hitl_feedback", "")
-    feedback_block = (
-        f"\nHuman clarification already provided for a prior ambiguity check:\n{hitl_feedback}\n"
-        "Treat the above as resolved context. Only flag genuinely NEW ambiguities "
-        "not addressed by the clarification above.\n"
-        if hitl_feedback
-        else ""
-    )
-    prompt = f"""Return JSON only — no extra text:
-{{
-  "has_ambiguity": false,
-  "ambiguity_description": "",
-  "has_ui": false,
-  "epics": [
-    {{
-      "title": "Epic title",
-      "description": "Epic description",
-      "stories": [
-        {{
-          "title": "Story title",
-          "description": "As a user, I want...",
-          "definition_of_done": ["criterion 1", "criterion 2"]
-        }}
-      ]
-    }}
-  ]
-}}
-{feedback_block}
-Business idea to analyze:
-{idea}
-"""
-    result = call_llm_json(prompt, system=system, fallback=_HITL_FALLBACK, model=PO_MODEL or None)
+    result = analyze_business(idea, hitl_feedback, _HITL_FALLBACK)
 
     if result.get("has_ambiguity"):
         return _handle_upstream_hitl(jira, result.get("ambiguity_description", "Unknown ambiguity"), state)

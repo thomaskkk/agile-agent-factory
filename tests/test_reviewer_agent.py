@@ -17,7 +17,7 @@ def _make_jira():
 
 def _patch_review(approved: bool, reason: str = ""):
     return patch(
-        "agile_agent_factory.agents.reviewer_agent.call_llm_json",
+        "agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json",
         return_value={"approved": approved, "rejection_reason": reason},
     )
 
@@ -111,7 +111,7 @@ def test_story_criteria_replaces_full_blueprint_in_prompt(tmp_path):
     constraints_file = tmp_path / "constraints.md"
     constraints_file.write_text(constraints_text)
 
-    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", qa_dir), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", constraints_file), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
@@ -141,7 +141,7 @@ def test_review_patch_uses_all_criteria_when_no_story_key(tmp_path):
     (qa_dir / "F3-417.md").write_text("**F3-417:**\nScenario: List recipes")
     (qa_dir / "F3-418.md").write_text("**F3-418:**\nScenario: CRUD")
 
-    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", qa_dir), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
@@ -168,7 +168,7 @@ def test_uses_qa_criteria_file_when_no_story_criteria(tmp_path):
     qa_file = tmp_path / "F3-1.md"
     qa_file.write_text(qa_content)
 
-    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
          patch("agile_agent_factory.agents.reviewer_agent.bp_qa_criteria_path", return_value=qa_file), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
@@ -196,7 +196,7 @@ def test_write_scope_injected_into_prompt(tmp_path):
         captured.append(prompt)
         return {"approved": True, "rejection_reason": ""}
 
-    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
@@ -229,7 +229,7 @@ def test_write_scope_files_always_included_despite_char_budget(tmp_path, monkeyp
         captured.append(prompt)
         return {"approved": True, "rejection_reason": ""}
 
-    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
@@ -262,7 +262,7 @@ def test_write_scope_absent_when_not_provided(tmp_path):
         captured.append(prompt)
         return {"approved": True, "rejection_reason": ""}
 
-    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
          patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
          patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):

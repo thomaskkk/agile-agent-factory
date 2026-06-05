@@ -70,7 +70,7 @@ def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, mo
         "review_retries": 0,
     }
 
-    with patch("agile_agent_factory.agents.po_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
         result = analyze_and_provision(jira, empty_state)
 
     assert jira.create_issue.call_count == 2
@@ -104,7 +104,7 @@ def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkey
         "review_retries": 0,
     }
 
-    with patch("agile_agent_factory.agents.po_agent.call_llm_json", side_effect=fake_llm_json):
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", side_effect=fake_llm_json):
         analyze_and_provision(jira, state_with_feedback)
 
     assert "only needs to run on Linux" in captured_prompt["value"]
@@ -136,7 +136,7 @@ def test_writes_business_intent(tmp_path, monkeypatch, mock_jira):
     jira = mock_jira
     jira.create_issue.side_effect = [{"key": "KB-1"}, {"key": "KB-2"}]
 
-    with patch("agile_agent_factory.agents.po_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
         analyze_and_provision(jira, {"status": "READY", "current_phase": None, "story_keys": [], "epic_keys": [], "blocking_issue_key": None, "subtasks": {}, "review_retries": 0})
 
     intent_file = tmp_path / "business_intent.md"

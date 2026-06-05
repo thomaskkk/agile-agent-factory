@@ -2,12 +2,12 @@ import json
 import re
 
 from agile_agent_factory.config import (
-    PRODUCT_ROOT, TL_MODEL,
+    PRODUCT_ROOT,
     BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS, bp_task_path,
 )
 from agile_agent_factory.tools.dependencies import UX_TECH_TO_PACKAGE
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.llm_adapters.tl import generate_architecture
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
 
@@ -49,63 +49,13 @@ def design_architecture(
 
     idea = BUSINESS_IDEA_PATH.read_text()
 
-    system = (
-        "You are a Tech Lead designing a Python software architecture. "
-        "All app code goes in app/, all tests in tests/. "
-        "Never produce nested app/app/ or tests/tests/ paths. "
-        "All imports must use `from app.<module> import <name>`. "
-        "Return JSON only."
-    )
-    ux_block = ""
-    if ux_spec and ux_spec.get("ui_type", "none") != "none":
-        decisions = "\n".join(f"- {d}" for d in ux_spec.get("design_decisions", []))
-        flows = "\n".join(
-            f"- {f.get('name', '')}: {f.get('purpose', '')}"
-            for f in ux_spec.get("screens_or_flows", [])
-        )
-        ux_block = f"""
-UI/UX Design Specification:
-  Type: {ux_spec.get('ui_type')} | Technology: {ux_spec.get('technology')}
-  Description: {ux_spec.get('description', '')}
-  Flows:
-{flows}
-  Design Decisions:
-{decisions}
-  State Management: {ux_spec.get('state_management', '')}
-"""
-
     ready_contracts = ready_contracts or state.get("ready_contracts", {}) or {}
-    ready_contracts_block = json.dumps(
-        {key: ready_contracts.get(key, {}) for key in story_keys},
-        indent=2,
-        sort_keys=True,
-    )
 
-    prompt = f"""Design the software architecture for this product.
-Return JSON only:
-{{
-  "files": [
-    {{"path": "app/module.py", "purpose": "what it does", "functions": ["sig(args) -> type"]}}
-  ],
-  "subtasks": [
-    {{"title": "Implement X", "story_key": "<key>", "description": "details"}}
-  ],
-  "import_rules": "...",
-  "test_command": "uv run pytest ../tests/ -v"
-}}
-
-Story keys: {story_keys}
-Validated Definition-of-Ready contracts (authoritative):
-{ready_contracts_block}
-
-Business idea:
-{idea}
-{ux_block}"""
     if state.get("current_phase") == "upstream_arch_done" and state.get("architecture"):
         log("Architecture already generated — reusing stored result (no LLM call).")
         result = state["architecture"]
     else:
-        result = call_llm_json(prompt, system=system, fallback=_ARCH_FALLBACK, model=TL_MODEL or None)
+        result = generate_architecture(idea, story_keys, ux_spec, ready_contracts, _ARCH_FALLBACK)
 
     subtask_type = jira.get_subtask_issue_type()
     subtask_keys: dict[str, str] = dict(state.get("subtasks", {}))

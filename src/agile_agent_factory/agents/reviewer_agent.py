@@ -1,12 +1,12 @@
 from pathlib import Path
 
 from agile_agent_factory.config import (
-    PRODUCT_ROOT, REVIEWER_MODEL, BP_ARCH_CONSTRAINTS, BP_QA_CRITERIA_DIR, bp_qa_criteria_path,
+    PRODUCT_ROOT, BP_ARCH_CONSTRAINTS, BP_QA_CRITERIA_DIR, bp_qa_criteria_path,
     REVIEW_MAX_FILES, REVIEW_MAX_FILE_CHARS, REVIEW_MAX_TOTAL_CHARS,
 )
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.jira_facade import JiraFacade
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.llm_adapters.reviewer import generate_review
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
 
@@ -93,45 +93,7 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
 
     files_block = "\n\n".join(fences)
 
-    system = (
-        "You are a Code Reviewer auditing generated code (Python, HTML templates, CSS, JS) "
-        "against a Definition of Done. "
-        "IMPORTANT: For Python ASGI/WSGI applications (FastAPI, Flask, Starlette), using "
-        "Starlette TestClient or httpx AsyncClient to exercise HTTP endpoints IS the correct "
-        "testing approach — it does not require binding to a real network socket. A server "
-        "wrapper whose start()/stop() methods manage lifecycle state and whose underlying ASGI "
-        "app passes all HTTP tests via TestClient fully satisfies 'listens for connections' and "
-        "'accepts HTTP requests' acceptance criteria. "
-        "Output ONLY a JSON object — no prose, no preamble, no markdown fences. "
-        "Schema: {\"approved\": bool, \"rejection_reason\": \"\"}"
-    )
-    scope_instruction = ""
-    if write_scope:
-        owned = "\n".join(f"  - {f}" for f in write_scope)
-        scope_instruction = f"""
-Story write scope — files owned by this story:
-{owned}
-
-Evaluate correctness and DoD compliance ONLY for the files listed above.
-Issues found in files OUTSIDE this scope are pre-existing problems owned by other
-stories and MUST NOT cause this review to fail — note them as informational only.
-"""
-
-    prompt = f"""Review the generated code against the blueprint DoD.
-You are shown the COMPLETE contents of all generated files below — Python source,
-HTML templates, CSS, and JS. Do not assume any file type is missing unless it is
-absent from the list. Judge functional correctness and DoD coverage only.
-{scope_instruction}
-Acceptance criteria (DoD):
-{dod_section[:8000]}
-
-Generated files:
-{files_block}
-
-Output ONLY valid JSON, nothing else:
-{{"approved": true, "rejection_reason": ""}}
-"""
-    result = call_llm_json(prompt, system=system, fallback=_REVIEW_FALLBACK, model=REVIEWER_MODEL or None)
+    result = generate_review(dod_section, files_block, write_scope, _REVIEW_FALLBACK)
     approved = result.get("approved", False)
     reason = result.get("rejection_reason", "")
 

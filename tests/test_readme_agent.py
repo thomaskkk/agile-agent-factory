@@ -19,7 +19,7 @@ def test_generate_readme_writes_file(tmp_path, monkeypatch):
     (tmp_path / "app" / "tracker.py").write_text("def track(): pass")
 
     fake_readme = "# Test Product\n\nA test product.\n"
-    with patch("agile_agent_factory.agents.readme_agent.call_llm", return_value=fake_readme):
+    with patch("agile_agent_factory.tools.llm_adapters.readme.call_llm", return_value=fake_readme):
         readme_agent.generate_readme({})
 
     result = (tmp_path / "README.md").read_text()
@@ -37,6 +37,6 @@ def test_generate_readme_quota_propagates(tmp_path, monkeypatch):
     monkeypatch.setattr(readme_agent, "PRODUCT_ROOT", tmp_path)
     monkeypatch.setattr(readme_agent, "README_PATH", tmp_path / "README.md")
 
-    with patch("agile_agent_factory.agents.readme_agent.call_llm", side_effect=LLMQuotaExceeded("anthropic", "quota")):
+    with patch("agile_agent_factory.tools.llm_adapters.readme.call_llm", side_effect=LLMQuotaExceeded("anthropic", "quota")):
         with pytest.raises(LLMQuotaExceeded):
             readme_agent.generate_readme({})
