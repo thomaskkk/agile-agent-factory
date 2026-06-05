@@ -440,7 +440,7 @@ def test_review_node_approved_marks_story_done():
     original = reviewer_agent.review_patch
     reviewer_agent.review_patch = MagicMock(return_value={"approved": True, "reason": ""})
     try:
-        with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+        with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira):
             result = review_node(state)
     finally:
         reviewer_agent.review_patch = original
@@ -464,7 +464,7 @@ def test_review_node_rejected_keeps_story_in_code_review():
     original = reviewer_agent.review_patch
     reviewer_agent.review_patch = MagicMock(return_value={"approved": False, "reason": "Missing tests"})
     try:
-        with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+        with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira):
             result = review_node(state)
     finally:
         reviewer_agent.review_patch = original
@@ -492,7 +492,7 @@ def test_review_node_max_retries_exhausted_triggers_hitl():
     original = reviewer_agent.review_patch
     reviewer_agent.review_patch = MagicMock(return_value={"approved": False, "reason": "Still failing"})
     try:
-        with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
+        with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira), \
              patch("langgraph.types.interrupt") as mock_interrupt:
             mock_interrupt.return_value = None
             result = review_node(state)
@@ -523,8 +523,8 @@ def test_dev_node_rework_path_stays_in_code_review():
     }
 
     jira = MagicMock()
-    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
-         patch("agile_agent_factory.nodes.pipeline._generate_code_with_llm") as mock_gen:
+    with patch("agile_agent_factory.nodes.dev_node.JiraClient", return_value=jira), \
+         patch("agile_agent_factory.nodes.dev_node._generate_code_with_llm") as mock_gen:
         result = dev_node(state)
 
     story_update = result["stories"]["F1-1"]
