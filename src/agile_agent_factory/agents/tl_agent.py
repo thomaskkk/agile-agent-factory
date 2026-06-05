@@ -1,14 +1,16 @@
 import json
 import re
 
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import (
-    PRODUCT_ROOT, TL_MODEL,
+    PRODUCT_ROOT,
     BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS, bp_task_path,
 )
 from agile_agent_factory.tools.dependencies import UX_TECH_TO_PACKAGE
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.llm_adapters.tl import generate_architecture
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
 
@@ -27,10 +29,10 @@ _ARCH_FALLBACK = {
 }
 
 
-def _transition_all(jira: JiraClient, keys: list[str], target: str) -> None:
+def _transition_all(jira: JiraClient, keys: list[str], target: WorkflowState) -> None:
     for key in keys:
         try:
-            jira.transition_issue(key, target)
+            jira.transition_to(key, target)
         except ValueError as e:
             log(str(e))
 
@@ -42,69 +44,19 @@ def design_architecture(
     ux_spec: dict,
     state: dict,
     ready_contracts: dict[str, dict] | None = None,
-) -> dict:
+) -> AgentResult:
     all_upstream_keys = story_keys + state.get("epic_keys", [])
-    _transition_all(jira, all_upstream_keys, "Tech Refinement")
+    _transition_all(jira, all_upstream_keys, WorkflowState.TECH_REFINEMENT)
 
     idea = BUSINESS_IDEA_PATH.read_text()
 
-    system = (
-        "You are a Tech Lead designing a Python software architecture. "
-        "All app code goes in app/, all tests in tests/. "
-        "Never produce nested app/app/ or tests/tests/ paths. "
-        "All imports must use `from app.<module> import <name>`. "
-        "Return JSON only."
-    )
-    ux_block = ""
-    if ux_spec and ux_spec.get("ui_type", "none") != "none":
-        decisions = "\n".join(f"- {d}" for d in ux_spec.get("design_decisions", []))
-        flows = "\n".join(
-            f"- {f.get('name', '')}: {f.get('purpose', '')}"
-            for f in ux_spec.get("screens_or_flows", [])
-        )
-        ux_block = f"""
-UI/UX Design Specification:
-  Type: {ux_spec.get('ui_type')} | Technology: {ux_spec.get('technology')}
-  Description: {ux_spec.get('description', '')}
-  Flows:
-{flows}
-  Design Decisions:
-{decisions}
-  State Management: {ux_spec.get('state_management', '')}
-"""
-
     ready_contracts = ready_contracts or state.get("ready_contracts", {}) or {}
-    ready_contracts_block = json.dumps(
-        {key: ready_contracts.get(key, {}) for key in story_keys},
-        indent=2,
-        sort_keys=True,
-    )
 
-    prompt = f"""Design the software architecture for this product.
-Return JSON only:
-{{
-  "files": [
-    {{"path": "app/module.py", "purpose": "what it does", "functions": ["sig(args) -> type"]}}
-  ],
-  "subtasks": [
-    {{"title": "Implement X", "story_key": "<key>", "description": "details"}}
-  ],
-  "import_rules": "...",
-  "test_command": "uv run pytest ../tests/ -v"
-}}
-
-Story keys: {story_keys}
-Validated Definition-of-Ready contracts (authoritative):
-{ready_contracts_block}
-
-Business idea:
-{idea}
-{ux_block}"""
     if state.get("current_phase") == "upstream_arch_done" and state.get("architecture"):
         log("Architecture already generated — reusing stored result (no LLM call).")
         result = state["architecture"]
     else:
-        result = call_llm_json(prompt, system=system, fallback=_ARCH_FALLBACK, model=TL_MODEL or None)
+        result = generate_architecture(idea, story_keys, ux_spec, ready_contracts, _ARCH_FALLBACK)
 
     subtask_type = jira.get_subtask_issue_type()
     subtask_keys: dict[str, str] = dict(state.get("subtasks", {}))
@@ -126,7 +78,7 @@ Business idea:
     _write_architecture_files(result)
     for sk in story_keys:
         _write_story_task(sk, result, gherkin_criteria, ux_spec, ready_contracts.get(sk, {}))
-    _transition_all(jira, all_upstream_keys, "To Development")
+    _transition_all(jira, all_upstream_keys, WorkflowState.TO_DEVELOPMENT)
     dependencies = [d for d in result.get("dependencies", []) if isinstance(d, str) and d.strip()]
     # The LLM sometimes omits dependencies entirely — seed the UX technology so an
     # obvious framework (e.g. Flask) is never lost. The downstream test-time scan is
@@ -134,13 +86,13 @@ Business idea:
     tech = (ux_spec or {}).get("technology", "").lower()
     if tech in UX_TECH_TO_PACKAGE and UX_TECH_TO_PACKAGE[tech] not in dependencies:
         dependencies.append(UX_TECH_TO_PACKAGE[tech])
-    return {
+    return AgentResult(payload={
         **state,
         "current_phase": "upstream_tl_done",
         "subtasks": subtask_keys,
         "dependencies": dependencies,
         "architecture": result,
-    }
+    })
 
 
 

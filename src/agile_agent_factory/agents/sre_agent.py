@@ -1,16 +1,16 @@
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
+from agile_agent_factory.tools.jira_facade import JiraFacade
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 
-def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> dict:
+def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> AgentResult:
     log("Emulated SRE deployment starting.")
+    facade = JiraFacade(jira)
     epic_keys = state.get("epic_keys", [])
 
-    for key in story_keys + epic_keys:
-        try:
-            jira.transition_issue(key, "QA")
-        except ValueError as e:
-            log(str(e))
+    facade.move_all(story_keys + epic_keys, WorkflowState.QA)
 
     report = (
         "CI/CD Pipeline Report (Emulated)\n"
@@ -24,24 +24,9 @@ def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> 
     for key in story_keys:
         jira.add_comment_adf(key, make_adf_doc(report))
         log(f"Posted deployment report to {key}.")
-        try:
-            jira.transition_issue(key, "Done")
-            log(f"Transitioned {key} to Done.")
-        except ValueError as e:
-            log(str(e))
 
-    for epic_key in epic_keys:
-        try:
-            jira.transition_issue(epic_key, "Done")
-            log(f"Transitioned Epic {epic_key} to Done.")
-        except ValueError as e:
-            log(str(e))
+    facade.move_all(story_keys, WorkflowState.DONE)
+    facade.move_all(epic_keys, WorkflowState.DONE)
+    facade.move_all(list(state.get("subtasks", {}).values()), WorkflowState.DONE)
 
-    for subtask_key in state.get("subtasks", {}).values():
-        try:
-            jira.transition_issue(subtask_key, "Done")
-            log(f"Transitioned Subtask {subtask_key} to Done.")
-        except ValueError as e:
-            log(str(e))
-
-    return {"status": "DONE", "current_phase": "release_done"}
+    return AgentResult(payload={"status": "DONE", "current_phase": "release_done"})

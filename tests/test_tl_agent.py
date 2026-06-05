@@ -45,7 +45,7 @@ def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch, mock_jira):
     jira.get_subtask_issue_type.return_value = "Subtask"
     jira.create_issue.return_value = {"key": "F1-3"}
 
-    with patch.object(tl, "call_llm_json") as mock_llm:
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json") as mock_llm:
         tl.design_architecture(jira, ["F1-1"], {}, {}, state)
 
     mock_llm.assert_not_called()
@@ -78,14 +78,14 @@ def test_skips_already_created_subtasks(tmp_path, monkeypatch, mock_jira):
     jira.get_subtask_issue_type.return_value = "Subtask"
     jira.create_issue.return_value = {"key": "F1-10"}
 
-    with patch.object(tl, "call_llm_json"):
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json"):
         result = tl.design_architecture(jira, ["F1-1"], {}, {}, state)
 
     # Only Task B is created; Task A is skipped
     jira.create_issue.assert_called_once()
     created_title = jira.create_issue.call_args.args[0]
     assert created_title == "Task B"
-    assert result["subtasks"] == {"Task A": "F1-9", "Task B": "F1-10"}
+    assert result.payload["subtasks"] == {"Task A": "F1-9", "Task B": "F1-10"}
 
 
 def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch, mock_jira):
@@ -109,14 +109,14 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch, mo
     jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
-    with patch.object(tl, "call_llm_json", return_value=arch) as mock_llm:
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json", return_value=arch) as mock_llm:
         result = tl.design_architecture(jira, ["F1-1"], {}, {}, state)
 
     mock_llm.assert_called_once()
-    assert result["current_phase"] == "upstream_tl_done"
-    assert result["dependencies"] == ["flask"]
+    assert result.payload["current_phase"] == "upstream_tl_done"
+    assert result.payload["dependencies"] == ["flask"]
     # architecture is returned in the result dict (LangGraph checkpointer persists it)
-    assert result["architecture"] == arch
+    assert result.payload["architecture"] == arch
 
 
 def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeypatch, mock_jira):
@@ -134,7 +134,7 @@ def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeyp
     jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
-    with patch.object(tl, "call_llm_json", return_value=arch) as mock_llm:
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json", return_value=arch) as mock_llm:
         tl.design_architecture(jira, ["F1-1"], {}, {}, state, ready_contracts={"F1-1": contract})
 
     prompt = mock_llm.call_args.args[0]
@@ -163,7 +163,7 @@ def test_writes_architecture_files(tmp_path, monkeypatch, mock_jira):
     jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
-    with patch.object(tl, "call_llm_json", return_value=arch):
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json", return_value=arch):
         tl.design_architecture(jira, ["F1-1"], {}, {}, state)
 
     decisions = tmp_path / "decisions.md"
@@ -205,7 +205,7 @@ def test_writes_task_file_per_story(tmp_path, monkeypatch, mock_jira):
     jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
-    with patch.object(tl, "call_llm_json", return_value=arch):
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json", return_value=arch):
         tl.design_architecture(jira, ["F1-1", "F1-2"], gherkin, {}, state)
 
     assert (tasks_dir / "F1-1.md").exists(), "Task file must be written for F1-1"
@@ -236,7 +236,7 @@ def test_task_file_leads_with_active_story_contract_and_read_only_context(tmp_pa
     jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
-    with patch.object(tl, "call_llm_json", return_value=arch):
+    with patch("agile_agent_factory.tools.llm_adapters.tl.call_llm_json", return_value=arch):
         tl.design_architecture(jira, ["F1-1", "F1-2"], {}, {}, _state("upstream_ux_done"), ready_contracts=contracts)
 
     f1 = (tmp_path / "F1-1.md").read_text()

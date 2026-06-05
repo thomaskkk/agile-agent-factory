@@ -11,6 +11,7 @@ from agile_agent_factory.tools.jira_client import (
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.dependencies import resolve_dependencies
 from agile_agent_factory.tools.pytest_runner import run_pytest
+from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _to_legacy_state
 from agile_agent_factory.nodes.dev_node import _load_dev_context, _correct_code, _extract_error_summary
@@ -49,9 +50,9 @@ def test_node(state: PipelineState) -> dict:
                         f"Tests passing after {retries} correction attempt(s). Proceeding to code review."
                     ),
                 )
-            _safe_transition(jira, sk, "To Code Review")
+            _safe_transition(jira, sk, WorkflowState.TO_CODE_REVIEW)
             for ek in state.get("epic_keys", []):
-                _safe_transition(jira, ek, "To Code Review")
+                _safe_transition(jira, ek, WorkflowState.TO_CODE_REVIEW)
             return {"stories": {sk: {"column": "code_review"}}}
 
         if exit_code in (4, 5) and last_output is None:

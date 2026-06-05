@@ -1,6 +1,7 @@
-from agile_agent_factory.config import PRODUCT_ROOT, UX_MODEL, BP_UX_DECISIONS
+from agile_agent_factory.agents.contract import AgentResult
+from agile_agent_factory.config import PRODUCT_ROOT, BP_UX_DECISIONS
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.llm_adapters.ux import generate_ux_spec
 from agile_agent_factory.tools.logger import log
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
@@ -33,7 +34,7 @@ def design_user_experience(
     story_keys: list[str],
     gherkin_criteria: dict[str, list[str]],
     state: dict,
-) -> dict:
+) -> AgentResult:
     log("Generating UI/UX design specification.")
     business_idea = BUSINESS_IDEA_PATH.read_text() if BUSINESS_IDEA_PATH.exists() else ""
 
@@ -46,45 +47,7 @@ def design_user_experience(
         if criteria:
             stories_block += "\n".join(f"  - {c.splitlines()[0]}" for c in criteria) + "\n"
 
-    system = (
-        "You are a UX designer embedded in an Agile team. "
-        "Your output defines interaction intent and user flow — never raw code or framework markup. "
-        "Choose exactly one technology from the allowed list; do not invent new ones. "
-        "Respond ONLY with valid JSON matching the exact schema."
-    )
-    prompt = f"""Design the user experience for this product.
-Return JSON only:
-{{
-  "ui_type": "cli",
-  "technology": "argparse",
-  "description": "High-level interaction model — intent and flow only, no code",
-  "screens_or_flows": [
-    {{
-      "name": "screen or command name",
-      "purpose": "what the user does here",
-      "key_elements": ["element or flag"],
-      "story_key": "STORY-KEY"
-    }}
-  ],
-  "state_management": "How data flows and state is managed at runtime",
-  "design_decisions": ["Decision 1", "Decision 2"]
-}}
-
-Allowed ui_type values: none, cli, web, tui, desktop, hybrid
-Allowed technology values: argparse, click, rich, Flask, FastAPI, Django, tkinter, none
-
-Rules:
-- Output interaction intent only — no code snippets, no HTML, no component implementations.
-- Pick the technology that best matches the business idea from the allowed list.
-- If the product has no user-facing interface, use ui_type "none" and technology "none".
-
-Business idea:
-{business_idea}
-
-User stories and acceptance criteria:
-{stories_block}
-"""
-    raw = call_llm_json(prompt, system=system, fallback=_UX_FALLBACK, model=UX_MODEL or None)
+    raw = generate_ux_spec(business_idea, stories_block, _UX_FALLBACK)
     spec = _validate_ux_spec(raw)
 
     if spec["ui_type"] != "none":
@@ -92,7 +55,7 @@ User stories and acceptance criteria:
 
     _write_ux_decisions(spec)
     log(f"UI/UX design complete: ui_type={spec['ui_type']}, technology={spec['technology']}.")
-    return spec
+    return AgentResult(payload={"ux_spec": spec})
 
 
 def _write_ux_decisions(spec: dict) -> None:

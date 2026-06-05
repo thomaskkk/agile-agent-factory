@@ -22,12 +22,13 @@ def test_design_user_experience_returns_validated_spec(tmp_path, monkeypatch, mo
         "design_decisions": ["Use subcommands", "Tabular output"],
     }
 
-    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.ux.call_llm_json", return_value=llm_response):
         result = ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
 
-    assert result["ui_type"] == "cli"
-    assert result["technology"] == "argparse"
-    assert len(result["screens_or_flows"]) == 1
+    spec = result.payload["ux_spec"]
+    assert spec["ui_type"] == "cli"
+    assert spec["technology"] == "argparse"
+    assert len(spec["screens_or_flows"]) == 1
 
 
 def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatch, mock_jira):
@@ -49,7 +50,7 @@ def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatc
         "design_decisions": ["Use Jinja2 templates"],
     }
 
-    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.ux.call_llm_json", return_value=llm_response):
         ux_agent.design_user_experience(jira, ["TEST-2", "TEST-3"], {}, {})
 
     assert jira.update_issue_description.call_count == 2
@@ -66,7 +67,7 @@ def test_design_user_experience_quota_propagates(tmp_path, monkeypatch, mock_jir
     jira = mock_jira
     jira._request.return_value = {"fields": {"summary": "Story", "description": {}}}
 
-    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", side_effect=LLMQuotaExceeded("anthropic", "quota")):
+    with patch("agile_agent_factory.tools.llm_adapters.ux.call_llm_json", side_effect=LLMQuotaExceeded("anthropic", "quota")):
         with pytest.raises(LLMQuotaExceeded):
             ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
 
@@ -107,7 +108,7 @@ def test_writes_ux_decisions_file(tmp_path, monkeypatch, mock_jira):
         "design_decisions": ["Use subcommands"],
     }
 
-    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.ux.call_llm_json", return_value=llm_response):
         ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
 
     ux_file = tmp_path / "ux_decisions.md"
@@ -136,7 +137,7 @@ def test_writes_ux_file_when_no_ui(tmp_path, monkeypatch, mock_jira):
         "design_decisions": [],
     }
 
-    with patch("agile_agent_factory.agents.ux_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.ux.call_llm_json", return_value=llm_response):
         ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
 
     ux_file = tmp_path / "ux_decisions.md"

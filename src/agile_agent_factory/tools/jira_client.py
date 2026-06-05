@@ -14,6 +14,7 @@ from agile_agent_factory.config import (
     JIRA_USER_EMAIL,
 )
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 
 class JiraClient:
@@ -100,6 +101,10 @@ class JiraClient:
             f"issue/{issue_key}/transitions",
             json={"transition": {"id": match["id"]}},
         )
+
+    def transition_to(self, issue_key: str, state: "WorkflowState") -> None:
+        """Typed convenience wrapper around transition_issue (see tools/workflow.py)."""
+        self.transition_issue(issue_key, state.value)
 
     def add_comment_adf(self, issue_key: str, adf_body: dict) -> None:
         if DRY_RUN:

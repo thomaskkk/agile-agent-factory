@@ -1,15 +1,15 @@
-from agile_agent_factory.config import DRY_RUN, QA_MODEL, bp_qa_criteria_path
+from agile_agent_factory.agents.contract import AgentResult
+from agile_agent_factory.config import DRY_RUN, bp_qa_criteria_path
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.llm_adapters.qa import generate_criteria
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 _QA_FALLBACK = {"acceptance_criteria": [], "test_contract": {}}
 
 
-def inject_gherkin_criteria(
-    jira: JiraClient, story_keys: list[str]
-) -> tuple[dict[str, list[str]], dict[str, dict]]:
-    """Return (criteria_dict, test_contracts_dict) for the given stories."""
+def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentResult:
+    """Return an AgentResult whose payload carries gherkin_criteria + test_contracts."""
     all_criteria: dict[str, list[str]] = {}
     all_test_contracts: dict[str, dict] = {}
 
@@ -19,39 +19,7 @@ def inject_gherkin_criteria(
         existing_description = issue["fields"].get("description") or {}
         log(f"Generating Gherkin criteria for {story_key}: {summary}")
 
-        system = (
-            "You are a QA engineer writing Gherkin acceptance criteria and a precise test contract. "
-            "Each Gherkin scenario maps 1-to-1 with a pytest test function. "
-            "The test_contract must specify the exact test file path, function names, and import paths "
-            "so the developer knows exactly what to implement. "
-            "Never reference ambiguous imports or shadow the app/ package. "
-            "Return JSON only."
-        )
-        prompt = f"""Write Gherkin acceptance criteria and a structured test contract for this user story.
-Return JSON only:
-{{
-  "acceptance_criteria": [
-    "Scenario: <title>\\n  Given <context>\\n  When <action>\\n  Then <outcome>"
-  ],
-  "test_contract": {{
-    "test_file": "tests/test_<feature>.py",
-    "test_functions": ["test_<behavior_1>", "test_<behavior_2>"],
-    "target_imports": ["from app.<module> import <symbol>"],
-    "fixtures": [{{"name": "<fixture_name>", "description": "<what it creates>"}}],
-    "sample_data": [{{"<field>": "<value>"}}],
-    "edge_cases": ["<edge case description>"]
-  }}
-}}
-
-Rules:
-- test_file must start with "tests/" and end with ".py"
-- test_functions must be valid Python identifiers starting with "test_"
-- target_imports must use "from app.<module> import <name>" form only
-- sample_data is a list of concrete dicts (1–3 examples) usable as pytest parameters
-
-User story: {summary}
-"""
-        result = call_llm_json(prompt, system=system, fallback=_QA_FALLBACK, model=QA_MODEL or None)
+        result = generate_criteria(summary, "", _QA_FALLBACK)
         criteria = result.get("acceptance_criteria", [])
         test_contract = result.get("test_contract") or {}
 
@@ -65,11 +33,11 @@ User story: {summary}
             new_description = {"version": 1, "type": "doc", "content": existing_content + criteria_nodes}
             jira.update_issue_description(story_key, new_description)
             try:
-                jira.transition_issue(story_key, "To Tech Refinement")
+                jira.transition_to(story_key, WorkflowState.TECH_REFINEMENT)
             except ValueError as e:
                 log(str(e))
 
-    return all_criteria, all_test_contracts
+    return AgentResult(payload={"gherkin_criteria": all_criteria, "test_contracts": all_test_contracts})
 
 
 def _write_qa_criteria(story_key: str, criteria: list[str], test_contract: dict) -> None:

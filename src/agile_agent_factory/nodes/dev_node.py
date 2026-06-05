@@ -14,6 +14,7 @@ from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm_json
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.path_utils import normalize_generated_path
+from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
 
@@ -163,11 +164,11 @@ def dev_node(state: PipelineState) -> dict:
     is_rework = story.get("column") == "code_review"
 
     if not is_rework:
-        _safe_transition(jira, sk, "Development")
+        _safe_transition(jira, sk, WorkflowState.DEVELOPMENT)
         for ek in state.get("epic_keys", []):
-            _safe_transition(jira, ek, "Development")
+            _safe_transition(jira, ek, WorkflowState.DEVELOPMENT)
         for subtask_key in (story.get("subtasks") or state.get("subtasks", {})).values():
-            _safe_transition(jira, subtask_key, "Development")
+            _safe_transition(jira, subtask_key, WorkflowState.DEVELOPMENT)
 
     blueprint = _load_dev_context(sk)
     review_feedback = story.get("review_rejection_reason", "")

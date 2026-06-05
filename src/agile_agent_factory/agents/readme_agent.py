@@ -1,8 +1,9 @@
 from agile_agent_factory.config import (
-    PRODUCT_ROOT, README_MODEL, BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS,
+    PRODUCT_ROOT, BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS,
     README_MAX_FILES, README_MAX_FILE_CHARS, README_MAX_TOTAL_CHARS,
 )
-from agile_agent_factory.tools.llm_client import call_llm
+from agile_agent_factory.agents.contract import AgentResult
+from agile_agent_factory.tools.llm_adapters.readme import generate as generate_readme_text
 from agile_agent_factory.tools.logger import log
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
@@ -10,7 +11,7 @@ README_PATH = PRODUCT_ROOT / "README.md"
 PYPROJECT_PATH = PRODUCT_ROOT / "pyproject.toml"
 
 
-def generate_readme(state: dict) -> None:
+def generate_readme(state: dict) -> AgentResult:
     log("Generating README.md for product output.")
 
     blueprint_parts = [
@@ -34,57 +35,7 @@ def generate_readme(state: dict) -> None:
         for path, content in list(file_contents.items())[:README_MAX_FILES]
     )[:README_MAX_TOTAL_CHARS]
 
-    system = (
-        "You are a technical writer producing a user-facing README.md for a Python software product. "
-        "Write clear Markdown. Do not mention Jira, agile, epics, stories, "
-        "Gherkin, or any internal factory tooling. "
-        "Do not include fenced code blocks for the overall document — "
-        "only use fenced blocks for code examples inside the README."
-    )
-    prompt = f"""You are writing a README.md for a software product.
-Your primary goal: make the person who wrote the original business requirements happy.
-They should be able to read this README and immediately know how to use the product.
-
-Rules:
-- MANDATORY first section: "## Setup" — it MUST appear before any run or test commands.
-  Examine the pyproject.toml below to determine what dependencies are needed and which
-  package manager is expected, then write the Setup section as follows:
-    - If pyproject.toml has a [dependency-groups] table (uv convention): provide two paths:
-        Option A (uv): `uv sync` then prefix commands with `uv run`
-        Option B (plain pip): `pip install <each runtime dep>` — list packages explicitly,
-        do NOT say `pip install .` because there is no [project] table to install from.
-    - If pyproject.toml has [project].dependencies (standard): provide two paths:
-        Option A (uv): `uv sync`
-        Option B (plain pip): `pip install .`
-    - Always state the Python version requirement (3.10+ unless the code shows otherwise).
-- Lead with HOW TO USE after Setup — whatever the business idea says the user will do
-  (run a script, import a library, call a CLI, etc.) must follow immediately after Setup.
-- Never omit the Setup section even for trivial apps — missing setup instructions are the
-  most common reason users get "No module named X" errors.
-- Infer usage from the actual source files provided. Do NOT fabricate commands or APIs
-  that don't exist in the code.
-- In the "Running the Tests" section: do NOT repeat the dependency install step — just
-  reference "After completing Setup above, also install pytest" and show the run command.
-- Keep sections minimal — only include what actually exists in the product.
-- Do not mention Jira, epics, stories, Gherkin, or any internal factory tooling.
-- Do not include fenced code blocks for the overall document.
-
-Original business requirements (what the user asked for):
-{business_idea}
-
-Architecture blueprint (what was planned and built):
-{blueprint[:8000]}
-
-pyproject.toml (use this to determine dependencies and package manager):
-```toml
-{pyproject}
-```
-
-Generated source files (what was actually implemented):
-{files_block if files_block else "(no files found)"}
-
-Write the README now.
-"""
-    readme_content = call_llm(prompt, system=system, model=README_MODEL or None)
+    readme_content = generate_readme_text(business_idea, blueprint, pyproject, files_block)
     README_PATH.write_text(readme_content)
     log(f"README.md written to {README_PATH}.")
+    return AgentResult(success=True)

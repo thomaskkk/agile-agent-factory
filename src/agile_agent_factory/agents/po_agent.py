@@ -1,7 +1,10 @@
-from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, PO_MODEL, BP_BUSINESS_INTENT
+from agile_agent_factory.agents.contract import AgentResult
+from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, BP_BUSINESS_INTENT
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_mention_doc, make_adf_heading, make_adf_bullet_list
-from agile_agent_factory.tools.llm_client import call_llm_json
+from agile_agent_factory.tools.jira_facade import JiraFacade
+from agile_agent_factory.tools.llm_adapters.po import analyze_business
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
 
@@ -20,56 +23,18 @@ def read_business_idea() -> str:
     return BUSINESS_IDEA_PATH.read_text()
 
 
-def analyze_and_provision(jira: JiraClient, state: dict) -> dict:
+def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
     if state.get("story_keys"):
         log("Story keys already in state — skipping Jira provisioning (idempotency guard).")
-        return state
+        return AgentResult(payload=state)
 
     idea = read_business_idea()
 
-    system = (
-        "You are a Product Owner in an Agile team. "
-        "Analyze the business requirements for logical contradictions, missing mandatory data, "
-        "or unfeasible scope. Then define Epics and User Stories with a Definition of Done. "
-        "Set has_ui to true if the product needs any user-facing interface (CLI with commands, "
-        "web UI, TUI, desktop app). Set it to false for pure library modules imported by other code. "
-        "Respond ONLY with valid JSON matching the exact schema below."
-    )
     hitl_feedback = state.get("hitl_feedback", "")
-    feedback_block = (
-        f"\nHuman clarification already provided for a prior ambiguity check:\n{hitl_feedback}\n"
-        "Treat the above as resolved context. Only flag genuinely NEW ambiguities "
-        "not addressed by the clarification above.\n"
-        if hitl_feedback
-        else ""
-    )
-    prompt = f"""Return JSON only — no extra text:
-{{
-  "has_ambiguity": false,
-  "ambiguity_description": "",
-  "has_ui": false,
-  "epics": [
-    {{
-      "title": "Epic title",
-      "description": "Epic description",
-      "stories": [
-        {{
-          "title": "Story title",
-          "description": "As a user, I want...",
-          "definition_of_done": ["criterion 1", "criterion 2"]
-        }}
-      ]
-    }}
-  ]
-}}
-{feedback_block}
-Business idea to analyze:
-{idea}
-"""
-    result = call_llm_json(prompt, system=system, fallback=_HITL_FALLBACK, model=PO_MODEL or None)
+    result = analyze_business(idea, hitl_feedback, _HITL_FALLBACK)
 
     if result.get("has_ambiguity"):
-        return _handle_upstream_hitl(jira, result.get("ambiguity_description", "Unknown ambiguity"), state)
+        return AgentResult(payload=_handle_upstream_hitl(jira, result.get("ambiguity_description", "Unknown ambiguity"), state))
 
     epic_keys: list[str] = []
     story_keys: list[str] = []
@@ -85,7 +50,7 @@ Business idea to analyze:
         epic_keys.append(epic_key)
         log(f"Created Epic: {epic_key} — {epic_data['title']}")
         try:
-            jira.transition_issue(epic_key, "Business Refinement")
+            jira.transition_to(epic_key, WorkflowState.BUSINESS_REFINEMENT)
         except ValueError as e:
             log(str(e))
 
@@ -107,19 +72,19 @@ Business idea to analyze:
             story_to_epic[story["key"]] = epic_key
             log(f"Created Story: {story['key']} — {story_data['title']}")
             try:
-                jira.transition_issue(story["key"], "Business Refinement")
+                jira.transition_to(story["key"], WorkflowState.BUSINESS_REFINEMENT)
             except ValueError as e:
                 log(str(e))
 
     _write_business_intent(idea, result.get("has_ui", False), epic_keys, story_keys)
-    return {
+    return AgentResult(payload={
         **state,
         "current_phase": "upstream_po_done",
         "epic_keys": epic_keys,
         "story_keys": story_keys,
         "has_ui": result.get("has_ui", False),
         "story_to_epic": story_to_epic,
-    }
+    })
 
 
 def _write_business_intent(idea: str, has_ui: bool, epic_keys: list, story_keys: list) -> None:
@@ -151,8 +116,7 @@ def _handle_upstream_hitl(jira: JiraClient, ambiguity: str, state: dict) -> dict
         "Story",
         description_adf=make_adf_doc(f"Ambiguity detected:\n{ambiguity}"),
     )
-    jira.set_flag(placeholder["key"])
-    jira.add_comment_adf(
+    JiraFacade(jira).flag_for_human(
         placeholder["key"],
         make_adf_mention_doc(
             JIRA_HUMAN_ACCOUNT_ID,

@@ -15,6 +15,7 @@ from agile_agent_factory.config import PRODUCT_ROOT, WIP_LIMITS
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import (
     _story_keys, _active_story, _safe_transition, _to_legacy_state,
@@ -59,8 +60,8 @@ def po_node(state: PipelineState) -> dict:
         raise_quota_interrupt(jira, None, e)
         result = analyze_and_provision(jira, legacy)
 
-    if result.get("hitl_required"):
-        blocking_key = result.get("blocking_issue_key")
+    if result.payload.get("hitl_required"):
+        blocking_key = result.payload.get("blocking_issue_key")
         log(f"PO ambiguity detected. Interrupting for human input. Blocking: {blocking_key}")
         feedback = interrupt({"type": "refinement", "blocking_key": blocking_key})
         legacy["hitl_feedback"] = feedback or ""
@@ -70,10 +71,10 @@ def po_node(state: PipelineState) -> dict:
             raise_quota_interrupt(jira, blocking_key, e)
             result = analyze_and_provision(jira, legacy)
 
-    epic_keys = result.get("epic_keys", [])
-    story_keys = result.get("story_keys", [])
-    story_to_epic = result.get("story_to_epic", {})
-    has_ui = result.get("has_ui", False)
+    epic_keys = result.payload.get("epic_keys", [])
+    story_keys = result.payload.get("story_keys", [])
+    story_to_epic = result.payload.get("story_to_epic", {})
+    has_ui = result.payload.get("has_ui", False)
 
     stories = {}
     for sk in story_keys:
@@ -104,13 +105,13 @@ def qa_node(state: PipelineState) -> dict:
     log(f"QA: generating Gherkin criteria for {sk}.")
 
     try:
-        gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
+        result = inject_gherkin_criteria(jira, [sk])
     except LLMQuotaExceeded as e:
         raise_quota_interrupt(jira, sk, e)
-        gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
+        result = inject_gherkin_criteria(jira, [sk])
 
-    criteria = gherkin.get(sk, [])
-    test_contract = test_contracts.get(sk, {})
+    criteria = result.payload["gherkin_criteria"].get(sk, [])
+    test_contract = result.payload["test_contracts"].get(sk, {})
 
     # Just set the flag — the dispatcher/refinement_gate handles column advancement
     # so parallel QA+UX dispatch doesn't race on the column field.
@@ -137,10 +138,10 @@ def ux_node(state: PipelineState) -> dict:
     log(f"UX: designing experience for {sk}.")
 
     try:
-        spec = design_user_experience(jira, [sk], gherkin, legacy)
+        spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
     except LLMQuotaExceeded as e:
         raise_quota_interrupt(jira, sk, e)
-        spec = design_user_experience(jira, [sk], gherkin, legacy)
+        spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
 
     # Just set the flag — dispatcher/refinement_gate advances the column.
     return {
@@ -182,7 +183,7 @@ def tl_node(state: PipelineState) -> dict:
     log(f"TL: designing architecture for {story_keys}.")
 
     for ek in state.get("epic_keys", []):
-        _safe_transition(jira, ek, "To Tech Refinement")
+        _safe_transition(jira, ek, WorkflowState.TECH_REFINEMENT)
 
     legacy = _to_legacy_state(state)
     legacy["story_keys"] = story_keys
@@ -194,9 +195,10 @@ def tl_node(state: PipelineState) -> dict:
         raise_quota_interrupt(jira, bk, e)
         result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
 
-    arch = result.get("architecture", {})
-    subtasks = result.get("subtasks", {})
-    deps = result.get("dependencies", [])
+    payload = result.payload
+    arch = payload.get("architecture", {})
+    subtasks = payload.get("subtasks", {})
+    deps = payload.get("dependencies", [])
 
     # Advance all processed stories to development
     stories_update = {
