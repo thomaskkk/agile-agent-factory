@@ -53,7 +53,7 @@ Backlog → Refinement → Tech Design → Development → Testing → Code Revi
 
 | Column | Agent | Notes |
 | --- | --- | --- |
-| `refinement` | QA + UX (parallel) | QA sets `refinement_qa_done`; UX sets `refinement_ux_done`. Dispatcher sends to `refinement_gate` when both done (avoids column-field race). UX skipped when `has_ui=False`. |
+| `refinement` | QA + UX (parallel) | QA sets `refinement_qa_done`; UX sets `refinement_ux_done`. Dispatcher sends to `refinement_gate` when both done (avoids column-field race). UX skipped when `has_ui=False`. `refinement_gate` builds and validates a ready contract (DoR check) before advancing to `tech_design`; validation errors keep the story in `refinement`. |
 | `tech_design` | TL (batch) | Processes ALL tech_design stories in one call; advances them all to development. |
 | `development` | Dev | LLM or aider code generation. |
 | `testing` | Test | Iterative pytest retry loop with two budgets (`MAX_RETRIES_DEV`, `MAX_CORRECTION_FAILURES`). |
@@ -92,21 +92,22 @@ Never bypass this function when writing files from LLM output.
 
 ## Testing
 
-Factory tests live in `agile-agent-factory/tests/`. They cover (144 tests total):
-- `path_utils` — 8 tests (path normalization and traversal rejection)
+Factory tests live in `agile-agent-factory/tests/`. They cover (158 tests total):
+- `path_utils` — 10 tests (path normalization and traversal rejection)
 - `llm_client` — 23 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, network-error handling)
 - `jira_client` — 17 tests (mocked HTTP via `responses` library, subtask type discovery, `append_adf_doc`, `update_issue_description`, DRY_RUN-early skip)
 - `pytest_runner` — 5 tests (PYTHONPATH injection, exit codes, `--with` extra-package flags)
 - `po_agent` — 4 tests (idempotency guard, issue creation, hitl_feedback injection)
-- `tl_agent` — 5 tests (architecture caching on resume, subtask idempotency, fresh LLM call + persistence)
-- `qa_agent` — 2 tests
+- `tl_agent` — 8 tests (architecture caching on resume, subtask idempotency, fresh LLM call + persistence, write-scope guard)
+- `qa_agent` — 4 tests
 - `ux_agent` — 7 tests (validated spec, Jira description append, quota propagation, unknown ui_type/technology rejection)
-- `reviewer_agent` — 6 tests
+- `reviewer_agent` — 9 tests
 - `dependencies` — 6 tests (import scan, package aliases, unparseable file skip, 3-signal union, Flask recovery)
 - `aider_client` — 5 tests (is_available guards, subprocess args, failure exit code)
 - `readme_agent` — 2 tests
+- `ready_contract` — 12 tests (contract validation, readiness repair, test_contract extraction)
 - `dispatcher` — 18 tests (RTL priority, WIP limits, refinement sub-phases, gate routing, active_story_key, code_review rework routing)
-- `graph` — 25 tests (graph compilation, node behavior, routing, state reducer, HITL scenarios, review HITL exhaustion, dev rework path)
+- `graph` — 28 tests (graph compilation, node behavior, routing, state reducer, HITL scenarios, review HITL exhaustion, dev rework path)
 
 PYTHONPATH for product tests is injected by `src/agile_agent_factory/tools/pytest_runner.py` (points to `../`), so `from app.module import ...` resolves correctly from the product root.
 
@@ -128,6 +129,9 @@ PYTHONPATH for product tests is injected by `src/agile_agent_factory/tools/pytes
 - `dependencies.resolve_dependencies(state, product_root)` unions three signals: TL-declared deps, UX-technology package, and a static AST scan of generated code — pass its result to `run_pytest()` as `extra_packages`
 - `MAX_CORRECTION_FAILURES = 2` caps how many times the correction LLM may produce zero usable files before escalating to HITL (these do not consume the `MAX_RETRIES_DEV` budget)
 - `active_story_key` in `PipelineState` is set by the dispatcher in each `Send()` payload — per-story nodes call `_active_story(state)` to get their assigned story; TL ignores it and reads all `tech_design` stories directly
+- `refinement_gate_node` builds a `ready_contract` dict (via `agents/ready_contract.py`) and validates it before advancing a story to `tech_design`; validation errors set `ready_validation_errors` and keep the story in `refinement`
+- TL task files (`blueprint/tasks/<story_key>.md`) include a **write-scope section** derived from the story's `test_contract` — it lists the exact files the dev agent is allowed to create/overwrite; the reviewer enforces the same scope via `write_scope` passed to `review_patch()`
+- `StoryState` new fields: `test_contract` (dict — expected test names and target interfaces, set by QA), `ready_contract` (dict — full DoR snapshot), `ready_validation_errors` (list[str]), `ready_validated` (bool)
 
 ## Known issues (not yet fixed)
 

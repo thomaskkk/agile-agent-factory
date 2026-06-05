@@ -177,4 +177,4 @@ cd agile-agent-factory
 uv run pytest tests/ -v
 ```
 
-133 tests covering `path_utils` (8), `llm_client` (23), `jira_client` (17), `pytest_runner` (5), `po_agent` (4), `tl_agent` (5), `qa_agent` (2), `ux_agent` (7), `reviewer_agent` (6), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `dispatcher` (18), and `graph` (25).
+158 tests covering `path_utils` (10), `llm_client` (23), `jira_client` (17), `pytest_runner` (5), `po_agent` (4), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (9), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (12), `dispatcher` (18), and `graph` (28).
