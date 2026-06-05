@@ -1,3 +1,4 @@
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import DRY_RUN, bp_qa_criteria_path
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.llm_adapters.qa import generate_criteria
@@ -7,10 +8,8 @@ from agile_agent_factory.tools.workflow import WorkflowState
 _QA_FALLBACK = {"acceptance_criteria": [], "test_contract": {}}
 
 
-def inject_gherkin_criteria(
-    jira: JiraClient, story_keys: list[str]
-) -> tuple[dict[str, list[str]], dict[str, dict]]:
-    """Return (criteria_dict, test_contracts_dict) for the given stories."""
+def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentResult:
+    """Return an AgentResult whose payload carries gherkin_criteria + test_contracts."""
     all_criteria: dict[str, list[str]] = {}
     all_test_contracts: dict[str, dict] = {}
 
@@ -38,7 +37,7 @@ def inject_gherkin_criteria(
             except ValueError as e:
                 log(str(e))
 
-    return all_criteria, all_test_contracts
+    return AgentResult(payload={"gherkin_criteria": all_criteria, "test_contracts": all_test_contracts})
 
 
 def _write_qa_criteria(story_key: str, criteria: list[str], test_contract: dict) -> None:

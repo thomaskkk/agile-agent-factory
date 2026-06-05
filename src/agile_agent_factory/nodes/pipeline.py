@@ -105,13 +105,13 @@ def qa_node(state: PipelineState) -> dict:
     log(f"QA: generating Gherkin criteria for {sk}.")
 
     try:
-        gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
+        result = inject_gherkin_criteria(jira, [sk])
     except LLMQuotaExceeded as e:
         raise_quota_interrupt(jira, sk, e)
-        gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
+        result = inject_gherkin_criteria(jira, [sk])
 
-    criteria = gherkin.get(sk, [])
-    test_contract = test_contracts.get(sk, {})
+    criteria = result.payload["gherkin_criteria"].get(sk, [])
+    test_contract = result.payload["test_contracts"].get(sk, {})
 
     # Just set the flag — the dispatcher/refinement_gate handles column advancement
     # so parallel QA+UX dispatch doesn't race on the column field.

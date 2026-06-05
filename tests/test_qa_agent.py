@@ -90,8 +90,8 @@ def test_returns_test_contract_alongside_criteria(tmp_path, monkeypatch, mock_ji
     with patch("agile_agent_factory.tools.llm_adapters.qa.call_llm_json", return_value=llm_response):
         result = inject_gherkin_criteria(jira, ["F1-1"])
 
-    assert isinstance(result, tuple), "Must return a tuple"
-    criteria_dict, test_contracts_dict = result
+    criteria_dict = result.payload["gherkin_criteria"]
+    test_contracts_dict = result.payload["test_contracts"]
     assert criteria_dict["F1-1"][0].startswith("Scenario:")
     assert test_contracts_dict["F1-1"]["test_file"] == "tests/test_auth.py"
     assert "test_login_with_valid_credentials" in test_contracts_dict["F1-1"]["test_functions"]
@@ -114,6 +114,7 @@ def test_test_contract_falls_back_to_empty_when_llm_omits_it(tmp_path, monkeypat
         "agile_agent_factory.tools.llm_adapters.qa.call_llm_json",
         return_value={"acceptance_criteria": ["Scenario: X\n  Given x\n  When y\n  Then z"]},
     ):
-        criteria_dict, test_contracts_dict = inject_gherkin_criteria(jira, ["F1-1"])
+        result = inject_gherkin_criteria(jira, ["F1-1"])
 
+    test_contracts_dict = result.payload["test_contracts"]
     assert test_contracts_dict["F1-1"] == {}
