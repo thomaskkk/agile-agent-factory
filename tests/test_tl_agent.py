@@ -27,6 +27,9 @@ def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch):
     """When phase is upstream_arch_done with a stored architecture, no LLM call is made."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
     (tmp_path / "business_idea.md").write_text("Build something.")
 
     stored_arch = {
@@ -53,6 +56,9 @@ def test_skips_already_created_subtasks(tmp_path, monkeypatch):
     """Subtasks already present in state['subtasks'] must not be recreated."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
     (tmp_path / "business_idea.md").write_text("Build something.")
 
     stored_arch = {
@@ -86,6 +92,9 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch):
     """A fresh TL run calls the LLM and returns architecture in the result dict."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_DECISIONS", tmp_path / "decisions.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md")
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
     (tmp_path / "business_idea.md").write_text("Build something.")
 
     arch = {
