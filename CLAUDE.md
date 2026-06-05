@@ -40,7 +40,7 @@ LangGraph `StateGraph` with a kanban dispatcher for story-level parallelism:
 - **State**: `PipelineState` (TypedDict) in `src/agile_agent_factory/state.py` — persisted by `SqliteSaver` in `pipeline_checkpoint.db`. Per-story state lives in `PipelineState.stories[story_key]` (a `StoryState` dict merged by `merge_stories` reducer).
 - **Graph**: `src/agile_agent_factory/graph.py` — `init → po → dispatcher → [qa | ux | refinement_gate | tl | dev | test | review] → dispatcher (loop) → finalize → END`
 - **Dispatcher**: `src/agile_agent_factory/nodes/dispatcher.py` — deterministic routing. Scans columns right-to-left (`code_review → testing → development → tech_design → refinement`), respects WIP limits, emits `Send()` commands. TL is dispatched as a batch (one `Send` for all `tech_design` stories); all other agents are per-story.
-- **Nodes**: `src/agile_agent_factory/nodes/pipeline.py` — each wraps an existing agent. Returns a partial dict; LangGraph merges via reducers. Never calls `update_state()`.
+- **Nodes**: each wraps an existing agent, returns a partial dict (LangGraph merges via reducers), and never calls `update_state()`. `nodes/pipeline.py` holds only the lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize); `nodes/dev_node.py`, `nodes/test_node.py`, and `nodes/review_node.py` hold dev/test/review respectively; shared helpers (incl. `raise_quota_interrupt`) live in `nodes/helpers.py`. `nodes/__init__.py` re-exports every node as the stable surface `graph.py` imports.
 - **HITL**: `langgraph.types.interrupt()` suspends execution; `Command(resume=feedback)` resumes. Three interrupt types: `refinement` (PO ambiguity), `intervention` (pytest retry exhaustion), `quota` (LLM rate-limit).
 
 ### Kanban Column Flow
@@ -92,7 +92,8 @@ Never bypass this function when writing files from LLM output.
 
 ## Testing
 
-Factory tests live in `agile-agent-factory/tests/`. They cover (158 tests total):
+Factory tests live in `agile-agent-factory/tests/`. They cover (161 tests total):
+- `config` — 3 tests (WIP_LIMITS env override + defaults, reviewer/readme budget constants)
 - `path_utils` — 10 tests (path normalization and traversal rejection)
 - `llm_client` — 23 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, network-error handling)
 - `jira_client` — 17 tests (mocked HTTP via `responses` library, subtask type discovery, `append_adf_doc`, `update_issue_description`, DRY_RUN-early skip)
