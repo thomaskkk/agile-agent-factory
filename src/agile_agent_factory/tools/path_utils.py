@@ -21,6 +21,14 @@ def normalize_generated_path(raw_path: str) -> Path:
     for prefix in ("app", "tests"):
         p = re.sub(rf"^{prefix}/{prefix}/", f"{prefix}/", p)
 
+    # Strip any leading path components that precede app/ or tests/.
+    # Handles LLM-hallucinated prefixes like Factory_project_claude/app/...
+    parts = Path(p).parts
+    for i, part in enumerate(parts):
+        if part in ("app", "tests"):
+            p = str(Path(*parts[i:]))
+            break
+
     result = (PARENT_ROOT / p).resolve()
 
     allowed = [(PARENT_ROOT / "app").resolve(), (PARENT_ROOT / "tests").resolve()]

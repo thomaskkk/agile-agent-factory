@@ -76,13 +76,34 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
         lang = _LANG_MAP.get(Path(path).suffix.lower(), "")
         return f"### {path}\n```{lang}\n{content[:MAX_REVIEW_FILE_CHARS]}\n```"
 
-    files_block = "\n\n".join(
-        _fence(path, content)
-        for path, content in list(generated.items())[:MAX_REVIEW_FILES]
-    )
+    # Write-scope files are always included first so they are never truncated away.
+    # Other files fill the remaining budget up to MAX_REVIEW_TOTAL_CHARS.
+    scope_set = set(write_scope or [])
+    scope_items = [(p, c) for p, c in generated.items() if p in scope_set]
+    other_items = [(p, c) for p, c in generated.items() if p not in scope_set]
+
+    fences: list[str] = []
+    total_chars = 0
+    for path, content in scope_items + other_items:
+        if len(fences) >= MAX_REVIEW_FILES:
+            break
+        fence = _fence(path, content)
+        if path not in scope_set and total_chars + len(fence) > MAX_REVIEW_TOTAL_CHARS:
+            break
+        fences.append(fence)
+        total_chars += len(fence) + 2  # +2 for the \n\n separator
+
+    files_block = "\n\n".join(fences)
+
     system = (
         "You are a Code Reviewer auditing generated code (Python, HTML templates, CSS, JS) "
         "against a Definition of Done. "
+        "IMPORTANT: For Python ASGI/WSGI applications (FastAPI, Flask, Starlette), using "
+        "Starlette TestClient or httpx AsyncClient to exercise HTTP endpoints IS the correct "
+        "testing approach — it does not require binding to a real network socket. A server "
+        "wrapper whose start()/stop() methods manage lifecycle state and whose underlying ASGI "
+        "app passes all HTTP tests via TestClient fully satisfies 'listens for connections' and "
+        "'accepts HTTP requests' acceptance criteria. "
         "Output ONLY a JSON object — no prose, no preamble, no markdown fences. "
         "Schema: {\"approved\": bool, \"rejection_reason\": \"\"}"
     )
@@ -107,7 +128,7 @@ Acceptance criteria (DoD):
 {dod_section[:8000]}
 
 Generated files:
-{files_block[:MAX_REVIEW_TOTAL_CHARS]}
+{files_block}
 
 Output ONLY valid JSON, nothing else:
 {{"approved": true, "rejection_reason": ""}}

@@ -216,6 +216,43 @@ def test_write_scope_injected_into_prompt(tmp_path):
         "Prompt must include a scope/outside-scope instruction"
 
 
+def test_write_scope_files_always_included_despite_char_budget(tmp_path, monkeypatch):
+    """Write-scope files must appear in the LLM prompt even when the total codebase
+    exceeds MAX_REVIEW_TOTAL_CHARS — they must be prioritized over other files."""
+    import agile_agent_factory.agents.reviewer_agent as ra
+    monkeypatch.setattr(ra, "MAX_REVIEW_TOTAL_CHARS", 200)  # tiny budget
+
+    jira = _make_jira()
+    captured: list[str] = []
+
+    def capture_llm(prompt, **kwargs):
+        captured.append(prompt)
+        return {"approved": True, "rejection_reason": ""}
+
+    with patch("agile_agent_factory.agents.reviewer_agent.call_llm_json", side_effect=capture_llm), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
+        (tmp_path / "app").mkdir()
+        (tmp_path / "tests").mkdir()
+        # Filler files that easily exhaust the budget alphabetically before the scope file
+        for i in range(10):
+            (tmp_path / "app" / f"aaa_filler_{i:02d}.py").write_text("x = " + "1" * 50)
+        # The write_scope file — comes last alphabetically, would be cut without prioritization
+        scope_file = tmp_path / "tests" / "test_web_server.py"
+        scope_file.write_text("def test_server(): assert True")
+
+        reviewer_agent.review_patch(
+            jira, ["F3-507"],
+            write_scope=["tests/test_web_server.py"],
+        )
+
+    assert captured, "call_llm_json was never called"
+    assert "tests/test_web_server.py" in captured[0], (
+        "Write-scope file must appear in the prompt even when total codebase exceeds char budget"
+    )
+
+
 def test_write_scope_absent_when_not_provided(tmp_path):
     """When write_scope is None, the prompt must NOT contain a scope restriction section."""
     jira = _make_jira()
