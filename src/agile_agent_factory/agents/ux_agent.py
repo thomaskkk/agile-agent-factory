@@ -1,3 +1,4 @@
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import PRODUCT_ROOT, BP_UX_DECISIONS
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.llm_adapters.ux import generate_ux_spec
@@ -33,7 +34,7 @@ def design_user_experience(
     story_keys: list[str],
     gherkin_criteria: dict[str, list[str]],
     state: dict,
-) -> dict:
+) -> AgentResult:
     log("Generating UI/UX design specification.")
     business_idea = BUSINESS_IDEA_PATH.read_text() if BUSINESS_IDEA_PATH.exists() else ""
 
@@ -54,7 +55,7 @@ def design_user_experience(
 
     _write_ux_decisions(spec)
     log(f"UI/UX design complete: ui_type={spec['ui_type']}, technology={spec['technology']}.")
-    return spec
+    return AgentResult(payload={"ux_spec": spec})
 
 
 def _write_ux_decisions(spec: dict) -> None:

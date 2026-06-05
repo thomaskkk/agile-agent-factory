@@ -1,6 +1,7 @@
 import json
 import re
 
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import (
     PRODUCT_ROOT,
     BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS, bp_task_path,
@@ -43,7 +44,7 @@ def design_architecture(
     ux_spec: dict,
     state: dict,
     ready_contracts: dict[str, dict] | None = None,
-) -> dict:
+) -> AgentResult:
     all_upstream_keys = story_keys + state.get("epic_keys", [])
     _transition_all(jira, all_upstream_keys, WorkflowState.TECH_REFINEMENT)
 
@@ -85,13 +86,13 @@ def design_architecture(
     tech = (ux_spec or {}).get("technology", "").lower()
     if tech in UX_TECH_TO_PACKAGE and UX_TECH_TO_PACKAGE[tech] not in dependencies:
         dependencies.append(UX_TECH_TO_PACKAGE[tech])
-    return {
+    return AgentResult(payload={
         **state,
         "current_phase": "upstream_tl_done",
         "subtasks": subtask_keys,
         "dependencies": dependencies,
         "architecture": result,
-    }
+    })
 
 
 

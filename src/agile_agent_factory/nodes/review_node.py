@@ -47,8 +47,8 @@ def review_node(state: PipelineState) -> dict:
         raise_quota_interrupt(jira, sk, e)
         result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
 
-    approved = result.get("approved", False)
-    reason = result.get("reason", "")
+    approved = result.payload.get("approved", False)
+    reason = result.payload.get("reason", "")
 
     if not approved and review_retries < MAX_REVIEW_RETRIES:
         cycle = review_retries + 1

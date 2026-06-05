@@ -2,6 +2,7 @@ from agile_agent_factory.config import (
     PRODUCT_ROOT, BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS,
     README_MAX_FILES, README_MAX_FILE_CHARS, README_MAX_TOTAL_CHARS,
 )
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.tools.llm_adapters.readme import generate as generate_readme_text
 from agile_agent_factory.tools.logger import log
 
@@ -10,7 +11,7 @@ README_PATH = PRODUCT_ROOT / "README.md"
 PYPROJECT_PATH = PRODUCT_ROOT / "pyproject.toml"
 
 
-def generate_readme(state: dict) -> None:
+def generate_readme(state: dict) -> AgentResult:
     log("Generating README.md for product output.")
 
     blueprint_parts = [
@@ -37,3 +38,4 @@ def generate_readme(state: dict) -> None:
     readme_content = generate_readme_text(business_idea, blueprint, pyproject, files_block)
     README_PATH.write_text(readme_content)
     log(f"README.md written to {README_PATH}.")
+    return AgentResult(success=True)

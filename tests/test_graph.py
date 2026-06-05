@@ -133,11 +133,11 @@ def test_po_node_creates_stories_from_agent_result():
 
     jira = MagicMock()
     with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
-         patch("agile_agent_factory.agents.po_agent.analyze_and_provision", return_value=mock_result):
+         patch("agile_agent_factory.agents.po_agent.analyze_and_provision", return_value=AgentResult(payload=mock_result)):
         # nodes.po_node imports analyze_and_provision lazily from po_agent
         from agile_agent_factory.agents import po_agent
         original = po_agent.analyze_and_provision
-        po_agent.analyze_and_provision = MagicMock(return_value=mock_result)
+        po_agent.analyze_and_provision = MagicMock(return_value=AgentResult(payload=mock_result))
         try:
             result = po_node({})
         finally:
@@ -162,7 +162,7 @@ def test_po_node_sets_refinement_ux_done_true_when_no_ui():
 
     jira = MagicMock()
     original = po_agent.analyze_and_provision
-    po_agent.analyze_and_provision = MagicMock(return_value=mock_result)
+    po_agent.analyze_and_provision = MagicMock(return_value=AgentResult(payload=mock_result))
     try:
         with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
             result = po_node({})
@@ -187,7 +187,7 @@ def test_po_node_sets_refinement_ux_done_false_when_has_ui():
 
     jira = MagicMock()
     original = po_agent.analyze_and_provision
-    po_agent.analyze_and_provision = MagicMock(return_value=mock_result)
+    po_agent.analyze_and_provision = MagicMock(return_value=AgentResult(payload=mock_result))
     try:
         with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
             result = po_node({})
@@ -292,7 +292,7 @@ def test_ux_node_sets_refinement_ux_done_flag():
     jira = MagicMock()
     mock_spec = {"screens": [], "flows": [], "ui_type": "web", "technology": "React"}
     original = ux_agent.design_user_experience
-    ux_agent.design_user_experience = MagicMock(return_value=mock_spec)
+    ux_agent.design_user_experience = MagicMock(return_value=AgentResult(payload={"ux_spec": mock_spec}))
     try:
         with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
             result = ux_node(state)
@@ -410,7 +410,7 @@ def test_tl_node_advances_all_tech_design_stories_to_development():
 
     jira = MagicMock()
     original = tl_agent.design_architecture
-    tl_agent.design_architecture = MagicMock(return_value=mock_result)
+    tl_agent.design_architecture = MagicMock(return_value=AgentResult(payload=mock_result))
     try:
         with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
             result = tl_node(state)
@@ -439,7 +439,7 @@ def test_review_node_approved_marks_story_done():
 
     jira = MagicMock()
     original = reviewer_agent.review_patch
-    reviewer_agent.review_patch = MagicMock(return_value={"approved": True, "reason": ""})
+    reviewer_agent.review_patch = MagicMock(return_value=AgentResult(success=True, payload={"approved": True, "reason": ""}))
     try:
         with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira):
             result = review_node(state)
@@ -463,7 +463,7 @@ def test_review_node_rejected_keeps_story_in_code_review():
 
     jira = MagicMock()
     original = reviewer_agent.review_patch
-    reviewer_agent.review_patch = MagicMock(return_value={"approved": False, "reason": "Missing tests"})
+    reviewer_agent.review_patch = MagicMock(return_value=AgentResult(success=False, payload={"approved": False, "reason": "Missing tests"}))
     try:
         with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira):
             result = review_node(state)
@@ -491,7 +491,7 @@ def test_review_node_max_retries_exhausted_triggers_hitl():
 
     jira = MagicMock()
     original = reviewer_agent.review_patch
-    reviewer_agent.review_patch = MagicMock(return_value={"approved": False, "reason": "Still failing"})
+    reviewer_agent.review_patch = MagicMock(return_value=AgentResult(success=False, payload={"approved": False, "reason": "Still failing"}))
     try:
         with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira), \
              patch("langgraph.types.interrupt") as mock_interrupt:

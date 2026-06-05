@@ -1,3 +1,4 @@
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, BP_BUSINESS_INTENT
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_mention_doc, make_adf_heading, make_adf_bullet_list
 from agile_agent_factory.tools.jira_facade import JiraFacade
@@ -22,10 +23,10 @@ def read_business_idea() -> str:
     return BUSINESS_IDEA_PATH.read_text()
 
 
-def analyze_and_provision(jira: JiraClient, state: dict) -> dict:
+def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
     if state.get("story_keys"):
         log("Story keys already in state — skipping Jira provisioning (idempotency guard).")
-        return state
+        return AgentResult(payload=state)
 
     idea = read_business_idea()
 
@@ -33,7 +34,7 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> dict:
     result = analyze_business(idea, hitl_feedback, _HITL_FALLBACK)
 
     if result.get("has_ambiguity"):
-        return _handle_upstream_hitl(jira, result.get("ambiguity_description", "Unknown ambiguity"), state)
+        return AgentResult(payload=_handle_upstream_hitl(jira, result.get("ambiguity_description", "Unknown ambiguity"), state))
 
     epic_keys: list[str] = []
     story_keys: list[str] = []
@@ -76,14 +77,14 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> dict:
                 log(str(e))
 
     _write_business_intent(idea, result.get("has_ui", False), epic_keys, story_keys)
-    return {
+    return AgentResult(payload={
         **state,
         "current_phase": "upstream_po_done",
         "epic_keys": epic_keys,
         "story_keys": story_keys,
         "has_ui": result.get("has_ui", False),
         "story_to_epic": story_to_epic,
-    }
+    })
 
 
 def _write_business_intent(idea: str, has_ui: bool, epic_keys: list, story_keys: list) -> None:

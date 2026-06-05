@@ -1,10 +1,11 @@
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
 from agile_agent_factory.tools.jira_facade import JiraFacade
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
 
 
-def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> dict:
+def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> AgentResult:
     log("Emulated SRE deployment starting.")
     facade = JiraFacade(jira)
     epic_keys = state.get("epic_keys", [])
@@ -28,4 +29,4 @@ def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> 
     facade.move_all(epic_keys, WorkflowState.DONE)
     facade.move_all(list(state.get("subtasks", {}).values()), WorkflowState.DONE)
 
-    return {"status": "DONE", "current_phase": "release_done"}
+    return AgentResult(payload={"status": "DONE", "current_phase": "release_done"})

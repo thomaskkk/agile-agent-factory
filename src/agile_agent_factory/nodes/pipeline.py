@@ -60,8 +60,8 @@ def po_node(state: PipelineState) -> dict:
         raise_quota_interrupt(jira, None, e)
         result = analyze_and_provision(jira, legacy)
 
-    if result.get("hitl_required"):
-        blocking_key = result.get("blocking_issue_key")
+    if result.payload.get("hitl_required"):
+        blocking_key = result.payload.get("blocking_issue_key")
         log(f"PO ambiguity detected. Interrupting for human input. Blocking: {blocking_key}")
         feedback = interrupt({"type": "refinement", "blocking_key": blocking_key})
         legacy["hitl_feedback"] = feedback or ""
@@ -71,10 +71,10 @@ def po_node(state: PipelineState) -> dict:
             raise_quota_interrupt(jira, blocking_key, e)
             result = analyze_and_provision(jira, legacy)
 
-    epic_keys = result.get("epic_keys", [])
-    story_keys = result.get("story_keys", [])
-    story_to_epic = result.get("story_to_epic", {})
-    has_ui = result.get("has_ui", False)
+    epic_keys = result.payload.get("epic_keys", [])
+    story_keys = result.payload.get("story_keys", [])
+    story_to_epic = result.payload.get("story_to_epic", {})
+    has_ui = result.payload.get("has_ui", False)
 
     stories = {}
     for sk in story_keys:
@@ -138,10 +138,10 @@ def ux_node(state: PipelineState) -> dict:
     log(f"UX: designing experience for {sk}.")
 
     try:
-        spec = design_user_experience(jira, [sk], gherkin, legacy)
+        spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
     except LLMQuotaExceeded as e:
         raise_quota_interrupt(jira, sk, e)
-        spec = design_user_experience(jira, [sk], gherkin, legacy)
+        spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
 
     # Just set the flag — dispatcher/refinement_gate advances the column.
     return {
@@ -195,9 +195,10 @@ def tl_node(state: PipelineState) -> dict:
         raise_quota_interrupt(jira, bk, e)
         result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
 
-    arch = result.get("architecture", {})
-    subtasks = result.get("subtasks", {})
-    deps = result.get("dependencies", [])
+    payload = result.payload
+    arch = payload.get("architecture", {})
+    subtasks = payload.get("subtasks", {})
+    deps = payload.get("dependencies", [])
 
     # Advance all processed stories to development
     stories_update = {

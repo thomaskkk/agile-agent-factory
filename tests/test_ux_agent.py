@@ -25,9 +25,10 @@ def test_design_user_experience_returns_validated_spec(tmp_path, monkeypatch, mo
     with patch("agile_agent_factory.tools.llm_adapters.ux.call_llm_json", return_value=llm_response):
         result = ux_agent.design_user_experience(jira, ["TEST-1"], {}, {})
 
-    assert result["ui_type"] == "cli"
-    assert result["technology"] == "argparse"
-    assert len(result["screens_or_flows"]) == 1
+    spec = result.payload["ux_spec"]
+    assert spec["ui_type"] == "cli"
+    assert spec["technology"] == "argparse"
+    assert len(spec["screens_or_flows"]) == 1
 
 
 def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatch, mock_jira):

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import (
     PRODUCT_ROOT, BP_ARCH_CONSTRAINTS, BP_QA_CRITERIA_DIR, bp_qa_criteria_path,
     REVIEW_MAX_FILES, REVIEW_MAX_FILE_CHARS, REVIEW_MAX_TOTAL_CHARS,
@@ -13,7 +14,7 @@ from agile_agent_factory.tools.workflow import WorkflowState
 _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return valid JSON — manual review required."}
 
 
-def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> dict:
+def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> AgentResult:
     facade = JiraFacade(jira)
     facade.move_all(story_keys, WorkflowState.IN_CODE_REVIEW)
 
@@ -68,7 +69,7 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
 
     if not generated:
         log("No generated files found for review.")
-        return {"approved": False, "reason": "No generated files found."}
+        return AgentResult(success=False, payload={"approved": False, "reason": "No generated files found."})
 
     def _fence(path: str, content: str) -> str:
         lang = _LANG_MAP.get(Path(path).suffix.lower(), "")
@@ -103,4 +104,4 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
     else:
         log(f"Code review: REJECTED — {reason}")
 
-    return {"approved": approved, "reason": reason}
+    return AgentResult(success=approved, payload={"approved": approved, "reason": reason})

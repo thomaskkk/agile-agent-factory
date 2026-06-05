@@ -22,8 +22,8 @@ def test_analyze_and_provision_skips_when_story_keys_already_exist(monkeypatch, 
     result = analyze_and_provision(jira, existing_state)
 
     jira.create_issue.assert_not_called()
-    assert result["story_keys"] == ["TEST-10", "TEST-11"]
-    assert result["epic_keys"] == ["TEST-9"]
+    assert result.payload["story_keys"] == ["TEST-10", "TEST-11"]
+    assert result.payload["epic_keys"] == ["TEST-9"]
 
 
 def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, monkeypatch, mock_jira):
@@ -74,7 +74,7 @@ def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, mo
         result = analyze_and_provision(jira, empty_state)
 
     assert jira.create_issue.call_count == 2
-    assert result["story_keys"] == ["TEST-2"]
+    assert result.payload["story_keys"] == ["TEST-2"]
 
 
 def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkeypatch, mock_jira):

@@ -85,7 +85,7 @@ def test_skips_already_created_subtasks(tmp_path, monkeypatch, mock_jira):
     jira.create_issue.assert_called_once()
     created_title = jira.create_issue.call_args.args[0]
     assert created_title == "Task B"
-    assert result["subtasks"] == {"Task A": "F1-9", "Task B": "F1-10"}
+    assert result.payload["subtasks"] == {"Task A": "F1-9", "Task B": "F1-10"}
 
 
 def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch, mock_jira):
@@ -113,10 +113,10 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch, mo
         result = tl.design_architecture(jira, ["F1-1"], {}, {}, state)
 
     mock_llm.assert_called_once()
-    assert result["current_phase"] == "upstream_tl_done"
-    assert result["dependencies"] == ["flask"]
+    assert result.payload["current_phase"] == "upstream_tl_done"
+    assert result.payload["dependencies"] == ["flask"]
     # architecture is returned in the result dict (LangGraph checkpointer persists it)
-    assert result["architecture"] == arch
+    assert result.payload["architecture"] == arch
 
 
 def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeypatch, mock_jira):

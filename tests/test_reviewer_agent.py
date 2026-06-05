@@ -39,7 +39,7 @@ def test_rejection_never_transitions_to_development(tmp_path):
 
         result = reviewer_agent.review_patch(jira, ["F1-1", "F1-2"])
 
-    assert result["approved"] is False
+    assert result.success is False
     for call in jira.transition_to.call_args_list:
         target = call.args[1] if len(call.args) > 1 else call.kwargs.get("state", "")
         assert target != "Development", (
@@ -79,7 +79,7 @@ def test_approval_transitions_to_qa(tmp_path):
 
         result = reviewer_agent.review_patch(jira, ["F1-1"])
 
-    assert result["approved"] is True
+    assert result.success is True
     targets = [
         (call.args[1] if len(call.args) > 1 else call.kwargs.get("state", ""))
         for call in jira.transition_to.call_args_list
