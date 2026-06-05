@@ -26,7 +26,7 @@ def test_writes_per_story_criteria_file(tmp_path, monkeypatch, mock_jira):
         ]
     }
 
-    with patch("agile_agent_factory.agents.qa_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.qa.call_llm_json", return_value=llm_response):
         inject_gherkin_criteria(jira, ["F1-1"])
 
     assert criteria_path.exists(), "QA criteria file must be written for story F1-1"
@@ -55,7 +55,7 @@ def test_writes_separate_files_for_multiple_stories(tmp_path, monkeypatch, mock_
 
     llm_response = {"acceptance_criteria": ["Scenario: X\n  Given x\n  When y\n  Then z"]}
 
-    with patch("agile_agent_factory.agents.qa_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.qa.call_llm_json", return_value=llm_response):
         inject_gherkin_criteria(jira, ["F1-1", "F1-2"])
 
     assert (tmp_path / "F1-1.md").exists()
@@ -87,7 +87,7 @@ def test_returns_test_contract_alongside_criteria(tmp_path, monkeypatch, mock_ji
             "edge_cases": ["empty password string", "non-existent username"],
         },
     }
-    with patch("agile_agent_factory.agents.qa_agent.call_llm_json", return_value=llm_response):
+    with patch("agile_agent_factory.tools.llm_adapters.qa.call_llm_json", return_value=llm_response):
         result = inject_gherkin_criteria(jira, ["F1-1"])
 
     assert isinstance(result, tuple), "Must return a tuple"
@@ -111,7 +111,7 @@ def test_test_contract_falls_back_to_empty_when_llm_omits_it(tmp_path, monkeypat
         "fields": {"summary": "A story", "description": {"content": []}}
     }
     with patch(
-        "agile_agent_factory.agents.qa_agent.call_llm_json",
+        "agile_agent_factory.tools.llm_adapters.qa.call_llm_json",
         return_value={"acceptance_criteria": ["Scenario: X\n  Given x\n  When y\n  Then z"]},
     ):
         criteria_dict, test_contracts_dict = inject_gherkin_criteria(jira, ["F1-1"])
