@@ -5,6 +5,7 @@ from agile_agent_factory.config import (
     REVIEW_MAX_FILES, REVIEW_MAX_FILE_CHARS, REVIEW_MAX_TOTAL_CHARS,
 )
 from agile_agent_factory.tools.jira_client import JiraClient
+from agile_agent_factory.tools.jira_facade import JiraFacade
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
@@ -13,11 +14,8 @@ _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return v
 
 
 def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> dict:
-    for key in story_keys:
-        try:
-            jira.transition_to(key, WorkflowState.IN_CODE_REVIEW)
-        except ValueError as e:
-            log(str(e))
+    facade = JiraFacade(jira)
+    facade.move_all(story_keys, WorkflowState.IN_CODE_REVIEW)
 
     if story_criteria:
         dod_section = "\n".join(story_criteria)
@@ -139,11 +137,7 @@ Output ONLY valid JSON, nothing else:
 
     if approved:
         log("Code review: APPROVED.")
-        for key in story_keys:
-            try:
-                jira.transition_to(key, WorkflowState.TO_QA)
-            except ValueError as e:
-                log(str(e))
+        facade.move_all(story_keys, WorkflowState.TO_QA)
     else:
         log(f"Code review: REJECTED — {reason}")
 

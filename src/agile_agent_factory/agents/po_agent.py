@@ -1,5 +1,6 @@
 from agile_agent_factory.config import JIRA_HUMAN_ACCOUNT_ID, PRODUCT_ROOT, PO_MODEL, BP_BUSINESS_INTENT
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_mention_doc, make_adf_heading, make_adf_bullet_list
+from agile_agent_factory.tools.jira_facade import JiraFacade
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
@@ -152,8 +153,7 @@ def _handle_upstream_hitl(jira: JiraClient, ambiguity: str, state: dict) -> dict
         "Story",
         description_adf=make_adf_doc(f"Ambiguity detected:\n{ambiguity}"),
     )
-    jira.set_flag(placeholder["key"])
-    jira.add_comment_adf(
+    JiraFacade(jira).flag_for_human(
         placeholder["key"],
         make_adf_mention_doc(
             JIRA_HUMAN_ACCOUNT_ID,
