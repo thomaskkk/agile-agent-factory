@@ -15,7 +15,7 @@ from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm_json
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.path_utils import normalize_generated_path
 from agile_agent_factory.state import PipelineState
-from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _notify_quota
+from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
 
 _FILE_FALLBACK = [
     {"path": "app/__init__.py", "content": ""},
@@ -156,8 +156,6 @@ def _extract_error_summary(output: str) -> str:
 
 def dev_node(state: PipelineState) -> dict:
     """Developer agent: generate code for ONE story."""
-    from langgraph.types import interrupt
-
     jira = JiraClient()
     sk, story = _active_story(state)
     log(f"Dev: generating code for {sk}.")
@@ -188,8 +186,7 @@ def dev_node(state: PipelineState) -> dict:
             log("Aider unavailable — using LLM-direct code generation.")
             _generate_code_with_llm(blueprint, review_feedback=review_feedback, model=DEV_MODEL or None)
     except LLMQuotaExceeded as e:
-        _notify_quota(jira, sk, e)
-        interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
+        raise_quota_interrupt(jira, sk, e)
         _generate_code_with_llm(blueprint, review_feedback=review_feedback, model=DEV_MODEL or None)
 
     if is_rework:

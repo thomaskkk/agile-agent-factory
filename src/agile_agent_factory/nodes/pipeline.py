@@ -18,7 +18,7 @@ from agile_agent_factory.tools.logger import log
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import (
     _story_keys, _active_story, _safe_transition, _to_legacy_state,
-    _notify_quota, _story_summary,
+    _story_summary, raise_quota_interrupt,
 )
 
 
@@ -56,8 +56,7 @@ def po_node(state: PipelineState) -> dict:
     try:
         result = analyze_and_provision(jira, legacy)
     except LLMQuotaExceeded as e:
-        _notify_quota(jira, None, e)
-        interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": None})
+        raise_quota_interrupt(jira, None, e)
         result = analyze_and_provision(jira, legacy)
 
     if result.get("hitl_required"):
@@ -68,8 +67,7 @@ def po_node(state: PipelineState) -> dict:
         try:
             result = analyze_and_provision(jira, legacy)
         except LLMQuotaExceeded as e:
-            _notify_quota(jira, blocking_key, e)
-            interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": blocking_key})
+            raise_quota_interrupt(jira, blocking_key, e)
             result = analyze_and_provision(jira, legacy)
 
     epic_keys = result.get("epic_keys", [])
@@ -99,7 +97,6 @@ def po_node(state: PipelineState) -> dict:
 
 def qa_node(state: PipelineState) -> dict:
     """QA agent: generate Gherkin acceptance criteria for ONE story (per-story in Phase 3+)."""
-    from langgraph.types import interrupt
     from agile_agent_factory.agents.qa_agent import inject_gherkin_criteria
 
     jira = JiraClient()
@@ -109,8 +106,7 @@ def qa_node(state: PipelineState) -> dict:
     try:
         gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
     except LLMQuotaExceeded as e:
-        _notify_quota(jira, sk, e)
-        interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
+        raise_quota_interrupt(jira, sk, e)
         gherkin, test_contracts = inject_gherkin_criteria(jira, [sk])
 
     criteria = gherkin.get(sk, [])
@@ -132,7 +128,6 @@ def qa_node(state: PipelineState) -> dict:
 
 def ux_node(state: PipelineState) -> dict:
     """UX agent: design screens/flows for ONE story (only when has_ui is True)."""
-    from langgraph.types import interrupt
     from agile_agent_factory.agents.ux_agent import design_user_experience
 
     jira = JiraClient()
@@ -144,8 +139,7 @@ def ux_node(state: PipelineState) -> dict:
     try:
         spec = design_user_experience(jira, [sk], gherkin, legacy)
     except LLMQuotaExceeded as e:
-        _notify_quota(jira, sk, e)
-        interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
+        raise_quota_interrupt(jira, sk, e)
         spec = design_user_experience(jira, [sk], gherkin, legacy)
 
     # Just set the flag — dispatcher/refinement_gate advances the column.
@@ -166,7 +160,6 @@ def tl_node(state: PipelineState) -> dict:
     TL stays batch because architecture is a single unified blueprint that
     spans all stories. Per-story TL dispatch is a Phase 4+ concern.
     """
-    from langgraph.types import interrupt
     from agile_agent_factory.agents.tl_agent import design_architecture
 
     jira = JiraClient()
@@ -198,8 +191,7 @@ def tl_node(state: PipelineState) -> dict:
         result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
     except LLMQuotaExceeded as e:
         bk = story_keys[0] if story_keys else None
-        _notify_quota(jira, bk, e)
-        interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": bk})
+        raise_quota_interrupt(jira, bk, e)
         result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
 
     arch = result.get("architecture", {})

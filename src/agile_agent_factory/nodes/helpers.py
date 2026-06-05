@@ -6,6 +6,8 @@ dev/test/review node modules. They contain no node entrypoints themselves.
 
 from __future__ import annotations
 
+from langgraph.types import interrupt
+
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
@@ -81,3 +83,17 @@ def _story_summary(jira: JiraClient, story_key: str) -> str:
     except Exception as e:
         log(f"Could not fetch story summary for {story_key}: {e}")
         return ""
+
+
+def raise_quota_interrupt(jira: JiraClient, blocking_key: str | None, exc: LLMQuotaExceeded) -> None:
+    """Notify Jira of the quota block and suspend the graph for HITL resume.
+
+    Encapsulates the repeated `_notify_quota(...)` + `interrupt({"type": "quota", ...})`
+    triplet shared by every node that calls an LLM.
+    """
+    _notify_quota(jira, blocking_key, exc)
+    interrupt({
+        "type": "quota",
+        "provider": getattr(exc, "provider", "unknown"),
+        "blocking_key": blocking_key,
+    })

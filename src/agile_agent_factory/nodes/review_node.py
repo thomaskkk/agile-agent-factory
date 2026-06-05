@@ -9,7 +9,7 @@ from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.state import PipelineState
-from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _notify_quota
+from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
 
 
 def review_node(state: PipelineState) -> dict:
@@ -43,8 +43,7 @@ def review_node(state: PipelineState) -> dict:
     try:
         result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
     except LLMQuotaExceeded as e:
-        _notify_quota(jira, sk, e)
-        interrupt({"type": "quota", "provider": getattr(e, "provider", "unknown"), "blocking_key": sk})
+        raise_quota_interrupt(jira, sk, e)
         result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
 
     approved = result.get("approved", False)
