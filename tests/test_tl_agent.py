@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -23,7 +23,7 @@ def _state(phase, **extra):
     return base
 
 
-def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch):
+def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch, mock_jira):
     """When phase is upstream_arch_done with a stored architecture, no LLM call is made."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
@@ -41,7 +41,7 @@ def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch):
     }
     state = _state("upstream_arch_done", architecture=stored_arch)
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
     jira.create_issue.return_value = {"key": "F1-3"}
 
@@ -52,7 +52,7 @@ def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch):
     jira.create_issue.assert_called_once()  # the one subtask from stored arch
 
 
-def test_skips_already_created_subtasks(tmp_path, monkeypatch):
+def test_skips_already_created_subtasks(tmp_path, monkeypatch, mock_jira):
     """Subtasks already present in state['subtasks'] must not be recreated."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
@@ -74,7 +74,7 @@ def test_skips_already_created_subtasks(tmp_path, monkeypatch):
     # Task A already created in a prior (interrupted) run
     state = _state("upstream_arch_done", architecture=stored_arch, subtasks={"Task A": "F1-9"})
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
     jira.create_issue.return_value = {"key": "F1-10"}
 
@@ -88,7 +88,7 @@ def test_skips_already_created_subtasks(tmp_path, monkeypatch):
     assert result["subtasks"] == {"Task A": "F1-9", "Task B": "F1-10"}
 
 
-def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch):
+def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch, mock_jira):
     """A fresh TL run calls the LLM and returns architecture in the result dict."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
@@ -106,7 +106,7 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch):
     }
     state = _state("upstream_ux_done")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
     with patch.object(tl, "call_llm_json", return_value=arch) as mock_llm:
@@ -119,7 +119,7 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch):
     assert result["architecture"] == arch
 
 
-def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeypatch):
+def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeypatch, mock_jira):
     """TL prompt must treat validated ready contracts as authoritative input."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
@@ -131,7 +131,7 @@ def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeyp
     arch = {"files": [], "subtasks": [], "import_rules": "...", "test_command": "uv run pytest ../tests/ -v", "dependencies": []}
     contract = {"story_key": "F1-1", "acceptance_criteria": ["Scenario: Contract-only behavior"], "ready_validated": True}
     state = _state("upstream_ux_done")
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
     with patch.object(tl, "call_llm_json", return_value=arch) as mock_llm:
@@ -142,7 +142,7 @@ def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeyp
     assert "Contract-only behavior" in prompt
 
 
-def test_writes_architecture_files(tmp_path, monkeypatch):
+def test_writes_architecture_files(tmp_path, monkeypatch, mock_jira):
     """design_architecture must write both decisions.md and constraints.md."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
@@ -160,7 +160,7 @@ def test_writes_architecture_files(tmp_path, monkeypatch):
     }
     state = _state("upstream_ux_done")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
     with patch.object(tl, "call_llm_json", return_value=arch):
@@ -175,7 +175,7 @@ def test_writes_architecture_files(tmp_path, monkeypatch):
     assert "pytest" in constraints.read_text()
 
 
-def test_writes_task_file_per_story(tmp_path, monkeypatch):
+def test_writes_task_file_per_story(tmp_path, monkeypatch, mock_jira):
     """design_architecture must write one task file per story in BP_TASKS_DIR."""
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
@@ -202,7 +202,7 @@ def test_writes_task_file_per_story(tmp_path, monkeypatch):
     }
     state = _state("upstream_ux_done", story_keys=["F1-1", "F1-2"])
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
     with patch.object(tl, "call_llm_json", return_value=arch):
@@ -214,7 +214,7 @@ def test_writes_task_file_per_story(tmp_path, monkeypatch):
     assert "Delete task" in (tasks_dir / "F1-2.md").read_text()
 
 
-def test_task_file_leads_with_active_story_contract_and_read_only_context(tmp_path, monkeypatch):
+def test_task_file_leads_with_active_story_contract_and_read_only_context(tmp_path, monkeypatch, mock_jira):
     import agile_agent_factory.agents.tl_agent as tl
     monkeypatch.setattr(tl, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
     monkeypatch.setattr("agile_agent_factory.agents.tl_agent.BP_ARCH_DECISIONS", tmp_path / "decisions.md")
@@ -233,7 +233,7 @@ def test_task_file_leads_with_active_story_contract_and_read_only_context(tmp_pa
         "F1-1": {"story_key": "F1-1", "acceptance_criteria": ["Scenario: Active story"]},
         "F1-2": {"story_key": "F1-2", "acceptance_criteria": ["Scenario: Other story"]},
     }
-    jira = MagicMock()
+    jira = mock_jira
     jira.get_subtask_issue_type.return_value = "Subtask"
 
     with patch.object(tl, "call_llm_json", return_value=arch):

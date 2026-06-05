@@ -1,7 +1,7 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
-def test_writes_per_story_criteria_file(tmp_path, monkeypatch):
+def test_writes_per_story_criteria_file(tmp_path, monkeypatch, mock_jira):
     """inject_gherkin_criteria must write one QA criteria file per story."""
     import agile_agent_factory.agents.qa_agent as qa_agent
     from agile_agent_factory.agents.qa_agent import inject_gherkin_criteria
@@ -12,7 +12,7 @@ def test_writes_per_story_criteria_file(tmp_path, monkeypatch):
         lambda sk: tmp_path / f"{sk}.md",
     )
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {
         "fields": {
             "summary": "User can log in",
@@ -35,7 +35,7 @@ def test_writes_per_story_criteria_file(tmp_path, monkeypatch):
     assert "Login success" in content
 
 
-def test_writes_separate_files_for_multiple_stories(tmp_path, monkeypatch):
+def test_writes_separate_files_for_multiple_stories(tmp_path, monkeypatch, mock_jira):
     """Two stories must produce two separate QA criteria files."""
     import agile_agent_factory.agents.qa_agent as qa_agent
     from agile_agent_factory.agents.qa_agent import inject_gherkin_criteria
@@ -45,7 +45,7 @@ def test_writes_separate_files_for_multiple_stories(tmp_path, monkeypatch):
         lambda sk: tmp_path / f"{sk}.md",
     )
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {
         "fields": {
             "summary": "A story",
@@ -62,7 +62,7 @@ def test_writes_separate_files_for_multiple_stories(tmp_path, monkeypatch):
     assert (tmp_path / "F1-2.md").exists()
 
 
-def test_returns_test_contract_alongside_criteria(tmp_path, monkeypatch):
+def test_returns_test_contract_alongside_criteria(tmp_path, monkeypatch, mock_jira):
     """inject_gherkin_criteria must return (criteria_dict, test_contracts_dict) tuple."""
     from agile_agent_factory.agents.qa_agent import inject_gherkin_criteria
 
@@ -70,7 +70,7 @@ def test_returns_test_contract_alongside_criteria(tmp_path, monkeypatch):
         "agile_agent_factory.agents.qa_agent.bp_qa_criteria_path",
         lambda sk: tmp_path / f"{sk}.md",
     )
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {
         "fields": {"summary": "User can log in", "description": {"content": []}}
     }
@@ -98,7 +98,7 @@ def test_returns_test_contract_alongside_criteria(tmp_path, monkeypatch):
     assert test_contracts_dict["F1-1"]["target_imports"] == ["from app.auth import login_user"]
 
 
-def test_test_contract_falls_back_to_empty_when_llm_omits_it(tmp_path, monkeypatch):
+def test_test_contract_falls_back_to_empty_when_llm_omits_it(tmp_path, monkeypatch, mock_jira):
     """If LLM omits test_contract key, return empty dict for that story."""
     from agile_agent_factory.agents.qa_agent import inject_gherkin_criteria
 
@@ -106,7 +106,7 @@ def test_test_contract_falls_back_to_empty_when_llm_omits_it(tmp_path, monkeypat
         "agile_agent_factory.agents.qa_agent.bp_qa_criteria_path",
         lambda sk: tmp_path / f"{sk}.md",
     )
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {
         "fields": {"summary": "A story", "description": {"content": []}}
     }

@@ -1,9 +1,9 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 
-def test_analyze_and_provision_skips_when_story_keys_already_exist(monkeypatch, tmp_path):
+def test_analyze_and_provision_skips_when_story_keys_already_exist(monkeypatch, tmp_path, mock_jira):
     """Idempotency: if story_keys are already in state, no Jira issues should be created."""
     from agile_agent_factory.agents.po_agent import analyze_and_provision
 
@@ -17,7 +17,7 @@ def test_analyze_and_provision_skips_when_story_keys_already_exist(monkeypatch, 
         "review_retries": 0,
     }
 
-    jira = MagicMock()
+    jira = mock_jira
 
     result = analyze_and_provision(jira, existing_state)
 
@@ -26,7 +26,7 @@ def test_analyze_and_provision_skips_when_story_keys_already_exist(monkeypatch, 
     assert result["epic_keys"] == ["TEST-9"]
 
 
-def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, monkeypatch):
+def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, monkeypatch, mock_jira):
     """When story_keys is empty, issues should be created as normal."""
     import agile_agent_factory.agents.po_agent as po_agent
     from agile_agent_factory.agents.po_agent import analyze_and_provision
@@ -54,7 +54,7 @@ def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, mo
         ],
     }
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.create_issue.side_effect = [
         {"key": "TEST-1"},  # epic
         {"key": "TEST-2"},  # story
@@ -77,7 +77,7 @@ def test_analyze_and_provision_creates_issues_when_story_keys_empty(tmp_path, mo
     assert result["story_keys"] == ["TEST-2"]
 
 
-def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkeypatch):
+def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkeypatch, mock_jira):
     """When hitl_feedback is in state, it must appear in the LLM prompt."""
     import agile_agent_factory.agents.po_agent as po_agent
     from agile_agent_factory.agents.po_agent import analyze_and_provision
@@ -92,7 +92,7 @@ def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkey
         captured_prompt["value"] = prompt
         return {"has_ambiguity": False, "ambiguity_description": "", "epics": []}
 
-    jira = MagicMock()
+    jira = mock_jira
     state_with_feedback = {
         "status": "READY",
         "current_phase": None,
@@ -110,7 +110,7 @@ def test_analyze_and_provision_includes_hitl_feedback_in_prompt(tmp_path, monkey
     assert "only needs to run on Linux" in captured_prompt["value"]
 
 
-def test_writes_business_intent(tmp_path, monkeypatch):
+def test_writes_business_intent(tmp_path, monkeypatch, mock_jira):
     """After analyze_and_provision, BP_BUSINESS_INTENT must exist and contain idea text."""
     import agile_agent_factory.agents.po_agent as po_agent
     from agile_agent_factory.agents.po_agent import analyze_and_provision
@@ -133,7 +133,7 @@ def test_writes_business_intent(tmp_path, monkeypatch):
         ],
     }
 
-    jira = MagicMock()
+    jira = mock_jira
     jira.create_issue.side_effect = [{"key": "KB-1"}, {"key": "KB-2"}]
 
     with patch("agile_agent_factory.agents.po_agent.call_llm_json", return_value=llm_response):

@@ -1,16 +1,16 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 
-def test_design_user_experience_returns_validated_spec(tmp_path, monkeypatch):
+def test_design_user_experience_returns_validated_spec(tmp_path, monkeypatch, mock_jira):
     """UX agent returns a validated spec dict with bounded ui_type and technology."""
     import agile_agent_factory.agents.ux_agent as ux_agent
 
     monkeypatch.setattr(ux_agent, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
     (tmp_path / "business_idea.md").write_text("Build a CLI expense tracker.")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {"fields": {"summary": "Log expenses", "description": {}}}
 
     llm_response = {
@@ -30,14 +30,14 @@ def test_design_user_experience_returns_validated_spec(tmp_path, monkeypatch):
     assert len(result["screens_or_flows"]) == 1
 
 
-def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatch):
+def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatch, mock_jira):
     """UX agent must call update_issue_description for each story when ui_type != none."""
     import agile_agent_factory.agents.ux_agent as ux_agent
 
     monkeypatch.setattr(ux_agent, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
     (tmp_path / "business_idea.md").write_text("Build a web app.")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {"fields": {"summary": "View dashboard", "description": {}}}
 
     llm_response = {
@@ -55,7 +55,7 @@ def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatc
     assert jira.update_issue_description.call_count == 2
 
 
-def test_design_user_experience_quota_propagates(tmp_path, monkeypatch):
+def test_design_user_experience_quota_propagates(tmp_path, monkeypatch, mock_jira):
     """LLMQuotaExceeded raised inside design_user_experience must not be caught."""
     from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
     import agile_agent_factory.agents.ux_agent as ux_agent
@@ -63,7 +63,7 @@ def test_design_user_experience_quota_propagates(tmp_path, monkeypatch):
     monkeypatch.setattr(ux_agent, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
     (tmp_path / "business_idea.md").write_text("Build something.")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {"fields": {"summary": "Story", "description": {}}}
 
     with patch("agile_agent_factory.agents.ux_agent.call_llm_json", side_effect=LLMQuotaExceeded("anthropic", "quota")):
@@ -87,7 +87,7 @@ def test_validate_ux_spec_rejects_unknown_technology():
     assert result == _UX_FALLBACK
 
 
-def test_writes_ux_decisions_file(tmp_path, monkeypatch):
+def test_writes_ux_decisions_file(tmp_path, monkeypatch, mock_jira):
     """design_user_experience must write BP_UX_DECISIONS with technology in content."""
     import agile_agent_factory.agents.ux_agent as ux_agent
 
@@ -95,7 +95,7 @@ def test_writes_ux_decisions_file(tmp_path, monkeypatch):
     (tmp_path / "business_idea.md").write_text("Build a CLI expense tracker.")
     monkeypatch.setattr("agile_agent_factory.agents.ux_agent.BP_UX_DECISIONS", tmp_path / "ux_decisions.md")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {"fields": {"summary": "Log expenses", "description": {}}}
 
     llm_response = {
@@ -116,7 +116,7 @@ def test_writes_ux_decisions_file(tmp_path, monkeypatch):
     assert "argparse" in content
 
 
-def test_writes_ux_file_when_no_ui(tmp_path, monkeypatch):
+def test_writes_ux_file_when_no_ui(tmp_path, monkeypatch, mock_jira):
     """A minimal BP_UX_DECISIONS file must be written even when ui_type == 'none'."""
     import agile_agent_factory.agents.ux_agent as ux_agent
 
@@ -124,7 +124,7 @@ def test_writes_ux_file_when_no_ui(tmp_path, monkeypatch):
     (tmp_path / "business_idea.md").write_text("Build a pure library.")
     monkeypatch.setattr("agile_agent_factory.agents.ux_agent.BP_UX_DECISIONS", tmp_path / "ux_decisions.md")
 
-    jira = MagicMock()
+    jira = mock_jira
     jira._request.return_value = {"fields": {"summary": "Library core", "description": {}}}
 
     llm_response = {
