@@ -1,14 +1,13 @@
-from agile_agent_factory.config import PRODUCT_ROOT, README_MODEL, BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS
+from agile_agent_factory.config import (
+    PRODUCT_ROOT, README_MODEL, BP_BUSINESS_INTENT, BP_ARCH_DECISIONS, BP_ARCH_CONSTRAINTS,
+    README_MAX_FILES, README_MAX_FILE_CHARS, README_MAX_TOTAL_CHARS,
+)
 from agile_agent_factory.tools.llm_client import call_llm
 from agile_agent_factory.tools.logger import log
 
 BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
 README_PATH = PRODUCT_ROOT / "README.md"
 PYPROJECT_PATH = PRODUCT_ROOT / "pyproject.toml"
-
-MAX_README_FILE_CHARS = 2000
-MAX_README_FILES = 15
-MAX_README_TOTAL_CHARS = 20000
 
 
 def generate_readme(state: dict) -> None:
@@ -31,9 +30,9 @@ def generate_readme(state: dict) -> None:
                 file_contents[rel] = f.read_text()
 
     files_block = "\n\n".join(
-        f"### {path}\n```python\n{content[:MAX_README_FILE_CHARS]}\n```"
-        for path, content in list(file_contents.items())[:MAX_README_FILES]
-    )[:MAX_README_TOTAL_CHARS]
+        f"### {path}\n```python\n{content[:README_MAX_FILE_CHARS]}\n```"
+        for path, content in list(file_contents.items())[:README_MAX_FILES]
+    )[:README_MAX_TOTAL_CHARS]
 
     system = (
         "You are a technical writer producing a user-facing README.md for a Python software product. "

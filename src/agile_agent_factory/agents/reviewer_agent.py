@@ -1,15 +1,14 @@
 from pathlib import Path
 
-from agile_agent_factory.config import PRODUCT_ROOT, REVIEWER_MODEL, BP_ARCH_CONSTRAINTS, BP_QA_CRITERIA_DIR, bp_qa_criteria_path
+from agile_agent_factory.config import (
+    PRODUCT_ROOT, REVIEWER_MODEL, BP_ARCH_CONSTRAINTS, BP_QA_CRITERIA_DIR, bp_qa_criteria_path,
+    REVIEW_MAX_FILES, REVIEW_MAX_FILE_CHARS, REVIEW_MAX_TOTAL_CHARS,
+)
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import call_llm_json
 from agile_agent_factory.tools.logger import log
 
 _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return valid JSON — manual review required."}
-
-MAX_REVIEW_FILES = 30
-MAX_REVIEW_FILE_CHARS = 8000      # generous per-file cap; small products are well under this
-MAX_REVIEW_TOTAL_CHARS = 50000    # overall prompt budget for the files block
 
 
 def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> dict:
@@ -74,10 +73,10 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
 
     def _fence(path: str, content: str) -> str:
         lang = _LANG_MAP.get(Path(path).suffix.lower(), "")
-        return f"### {path}\n```{lang}\n{content[:MAX_REVIEW_FILE_CHARS]}\n```"
+        return f"### {path}\n```{lang}\n{content[:REVIEW_MAX_FILE_CHARS]}\n```"
 
     # Write-scope files are always included first so they are never truncated away.
-    # Other files fill the remaining budget up to MAX_REVIEW_TOTAL_CHARS.
+    # Other files fill the remaining budget up to REVIEW_MAX_TOTAL_CHARS.
     scope_set = set(write_scope or [])
     scope_items = [(p, c) for p, c in generated.items() if p in scope_set]
     other_items = [(p, c) for p, c in generated.items() if p not in scope_set]
@@ -85,10 +84,10 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
     fences: list[str] = []
     total_chars = 0
     for path, content in scope_items + other_items:
-        if len(fences) >= MAX_REVIEW_FILES:
+        if len(fences) >= REVIEW_MAX_FILES:
             break
         fence = _fence(path, content)
-        if path not in scope_set and total_chars + len(fence) > MAX_REVIEW_TOTAL_CHARS:
+        if path not in scope_set and total_chars + len(fence) > REVIEW_MAX_TOTAL_CHARS:
             break
         fences.append(fence)
         total_chars += len(fence) + 2  # +2 for the \n\n separator

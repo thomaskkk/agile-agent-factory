@@ -78,3 +78,11 @@ WIP_LIMITS = {
     "testing": int(os.environ.get("WIP_LIMIT_TESTING", "2")),
     "code_review": int(os.environ.get("WIP_LIMIT_CODE_REVIEW", "1")),
 }
+
+# LLM prompt budgets (env-overridable for tuning without code changes)
+REVIEW_MAX_FILES = int(os.environ.get("REVIEW_MAX_FILES", "30"))
+REVIEW_MAX_FILE_CHARS = int(os.environ.get("REVIEW_MAX_FILE_CHARS", "8000"))
+REVIEW_MAX_TOTAL_CHARS = int(os.environ.get("REVIEW_MAX_TOTAL_CHARS", "50000"))
+README_MAX_FILES = int(os.environ.get("README_MAX_FILES", "15"))
+README_MAX_FILE_CHARS = int(os.environ.get("README_MAX_FILE_CHARS", "2000"))
+README_MAX_TOTAL_CHARS = int(os.environ.get("README_MAX_TOTAL_CHARS", "20000"))

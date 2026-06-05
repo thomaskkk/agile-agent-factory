@@ -218,9 +218,9 @@ def test_write_scope_injected_into_prompt(tmp_path):
 
 def test_write_scope_files_always_included_despite_char_budget(tmp_path, monkeypatch):
     """Write-scope files must appear in the LLM prompt even when the total codebase
-    exceeds MAX_REVIEW_TOTAL_CHARS — they must be prioritized over other files."""
+    exceeds REVIEW_MAX_TOTAL_CHARS — they must be prioritized over other files."""
     import agile_agent_factory.agents.reviewer_agent as ra
-    monkeypatch.setattr(ra, "MAX_REVIEW_TOTAL_CHARS", 200)  # tiny budget
+    monkeypatch.setattr(ra, "REVIEW_MAX_TOTAL_CHARS", 200)  # tiny budget
 
     jira = _make_jira()
     captured: list[str] = []

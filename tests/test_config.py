@@ -20,3 +20,13 @@ def test_wip_limits_default_values():
         "testing": 2,
         "code_review": 1,
     }
+
+
+def test_review_and_readme_budgets_present():
+    import agile_agent_factory.config as config
+    assert config.REVIEW_MAX_FILES == 30
+    assert config.REVIEW_MAX_FILE_CHARS == 8000
+    assert config.REVIEW_MAX_TOTAL_CHARS == 50000
+    assert config.README_MAX_FILES == 15
+    assert config.README_MAX_FILE_CHARS == 2000
+    assert config.README_MAX_TOTAL_CHARS == 20000
