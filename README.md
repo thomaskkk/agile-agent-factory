@@ -53,23 +53,31 @@ agile-agent-factory/        ← this repo (the factory)
 │       ├── tools/          ← infrastructure utilities
 │       │   ├── logger.py           ← timestamped stdout logger
 │       │   ├── llm_client.py       ← Anthropic primary + OpenAI fallback; LLMQuotaExceeded exception
+│       │   ├── llm_adapters/       ← per-agent prompt builders + thin LLM callers (po, qa, ux, tl, reviewer, readme)
 │       │   ├── jira_client.py      ← Jira REST API v3 (ADF, JQL, transitions, flags, subtask type discovery)
+│       │   ├── jira_facade.py      ← domain adapter over JiraClient (advance/move_all/flag_for_human/post_section)
+│       │   ├── workflow.py         ← WorkflowState enum: single source of truth for Jira transition targets
 │       │   ├── path_utils.py       ← safe path normalization for AI-generated paths
 │       │   ├── pytest_runner.py    ← pytest subprocess with PYTHONPATH injection
 │       │   ├── dependencies.py     ← third-party dependency resolution (declared + UX + AST scan)
 │       │   └── aider_client.py     ← Aider CLI subprocess (gated by AIDER_ENABLED)
-│       ├── agents/         ← business-logic agents
+│       ├── agents/         ← business-logic agents (each returns AgentResult)
+│       │   ├── contract.py         ← AgentResult(success, payload, errors) shared return contract
 │       │   ├── po_agent.py         ← Jira epic/story provisioning, has_ui detection, upstream HITL
-│       │   ├── qa_agent.py         ← Gherkin acceptance criteria per story
+│       │   ├── qa_agent.py         ← Gherkin acceptance criteria + test_contract per story
 │       │   ├── ux_agent.py         ← UI/UX design spec (cli/web/tui), appends to Jira stories
 │       │   ├── tl_agent.py         ← architecture design, dependency collection, subtasks, blueprint/ files
+│       │   ├── ready_contract.py   ← Definition-of-Ready contract builder + validation (refinement gate)
 │       │   ├── reviewer_agent.py   ← DoD audit via LLM
 │       │   ├── readme_agent.py     ← README generation from blueprint + product code scan
 │       │   └── sre_agent.py        ← emulated CI/CD report, Jira Done transition
 │       └── nodes/          ← LangGraph node wrappers
-│           ├── pipeline.py         ← all node functions (per-story via active_story_key; TL is batch)
+│           ├── pipeline.py         ← lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize)
+│           ├── dev_node.py         ← development node (LLM/aider code generation)
+│           ├── test_node.py        ← testing node (pytest retry loop)
+│           ├── review_node.py      ← code-review node (DoD audit + rework routing)
 │           ├── dispatcher.py       ← right-to-left kanban dispatcher with WIP limits and Send() fan-out
-│           └── subgraphs.py        ← pytest retry subgraph
+│           └── helpers.py          ← shared node helpers (incl. raise_quota_interrupt)
 └── tests/                  ← factory unit tests (not product tests)
 
 ../                         ← product output (sibling directory)
@@ -177,4 +185,4 @@ cd agile-agent-factory
 uv run pytest tests/ -v
 ```
 
-158 tests covering `path_utils` (10), `llm_client` (23), `jira_client` (17), `pytest_runner` (5), `po_agent` (4), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (9), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (12), `dispatcher` (18), and `graph` (28).
+180 tests covering `config` (3), `workflow` (2), `jira_facade` (5), `llm_adapters` (10), `agent_contract` (2), `path_utils` (10), `llm_client` (23), `jira_client` (17), `pytest_runner` (5), `po_agent` (4), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (9), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (12), `dispatcher` (18), and `graph` (28).
