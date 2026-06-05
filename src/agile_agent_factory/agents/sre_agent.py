@@ -1,17 +1,15 @@
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
+from agile_agent_factory.tools.jira_facade import JiraFacade
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
 
 
 def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> dict:
     log("Emulated SRE deployment starting.")
+    facade = JiraFacade(jira)
     epic_keys = state.get("epic_keys", [])
 
-    for key in story_keys + epic_keys:
-        try:
-            jira.transition_to(key, WorkflowState.QA)
-        except ValueError as e:
-            log(str(e))
+    facade.move_all(story_keys + epic_keys, WorkflowState.QA)
 
     report = (
         "CI/CD Pipeline Report (Emulated)\n"
@@ -25,24 +23,9 @@ def emulate_deployment(jira: JiraClient, story_keys: list[str], state: dict) -> 
     for key in story_keys:
         jira.add_comment_adf(key, make_adf_doc(report))
         log(f"Posted deployment report to {key}.")
-        try:
-            jira.transition_to(key, WorkflowState.DONE)
-            log(f"Transitioned {key} to Done.")
-        except ValueError as e:
-            log(str(e))
 
-    for epic_key in epic_keys:
-        try:
-            jira.transition_to(epic_key, WorkflowState.DONE)
-            log(f"Transitioned Epic {epic_key} to Done.")
-        except ValueError as e:
-            log(str(e))
-
-    for subtask_key in state.get("subtasks", {}).values():
-        try:
-            jira.transition_to(subtask_key, WorkflowState.DONE)
-            log(f"Transitioned Subtask {subtask_key} to Done.")
-        except ValueError as e:
-            log(str(e))
+    facade.move_all(story_keys, WorkflowState.DONE)
+    facade.move_all(epic_keys, WorkflowState.DONE)
+    facade.move_all(list(state.get("subtasks", {}).values()), WorkflowState.DONE)
 
     return {"status": "DONE", "current_phase": "release_done"}
