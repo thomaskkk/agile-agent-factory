@@ -26,6 +26,13 @@ class LLMQuotaExceeded(Exception):
         self.provider = provider
 
 
+class LLMTransientError(Exception):
+    """Timeout or transient network error — retried with its own patient backoff, not a quota event."""
+    def __init__(self, provider: str, message: str):
+        super().__init__(message)
+        self.provider = provider
+
+
 _OPENAI_PREFIXES = ("gpt-", "o1-", "o3-", "o4-")
 
 
@@ -103,11 +110,36 @@ def _call_openai(prompt: str, system: str = "", model: str | None = None) -> str
     except openai.RateLimitError as e:
         raise LLMQuotaExceeded("openai", str(e)) from e
     except (openai.APITimeoutError, openai.APIConnectionError) as e:
-        raise LLMQuotaExceeded("openai", f"Network error: {e}") from e
+        raise LLMTransientError("openai", f"Network error: {e}") from e
     return response.content
 
 
+def _call_one_model(prompt: str, system: str, model: str, prefill: str) -> str:
+    """Call a single named model, dispatching by provider."""
+    if _detect_provider(model) == "openai":
+        return _call_openai(prompt, system, model)
+    return _call_anthropic(prompt, system, model, prefill=prefill)
+
+
 def _call_with_fallback(prompt: str, system: str = "", model: str | None = None, prefill: str = "") -> str:
+    # Comma-separated chain: "claude-opus-4-8,claude-sonnet-4-6,gpt-4o"
+    if model and "," in model:
+        chain = [m.strip() for m in model.split(",") if m.strip()]
+        last_exc: Exception | None = None
+        for m in chain:
+            try:
+                return _call_one_model(prompt, system, m, prefill)
+            except LLMQuotaExceeded as e:
+                log(f"{m} quota exceeded — trying next model in chain.")
+                last_exc = e
+            except Exception as e:
+                log(f"{m} failed: {e} — trying next model in chain.")
+                last_exc = e
+        # All models in chain exhausted
+        if isinstance(last_exc, LLMQuotaExceeded):
+            raise last_exc
+        raise LLMQuotaExceeded("chain", f"All models in chain failed. Last: {last_exc}")
+
     if model:
         detected = _detect_provider(model)
         if detected == "openai":
@@ -152,6 +184,15 @@ def call_llm(prompt: str, system: str = "", model: str | None = None, prefill: s
     for attempt in range(LLM_QUOTA_MAX_RETRIES + 1):
         try:
             return _call_with_fallback(prompt, system, model, prefill=prefill)
+        except LLMTransientError as e:
+            if attempt >= LLM_QUOTA_MAX_RETRIES:
+                raise
+            wait = LLM_RETRY_BACKOFF_SECONDS * (2 ** attempt)
+            log(
+                f"LLM transient error ({e.provider}): {e}. "
+                f"Backing off {wait}s before retry {attempt + 1}/{LLM_QUOTA_MAX_RETRIES}."
+            )
+            time.sleep(wait)
         except LLMQuotaExceeded as e:
             if attempt >= LLM_QUOTA_MAX_RETRIES:
                 raise

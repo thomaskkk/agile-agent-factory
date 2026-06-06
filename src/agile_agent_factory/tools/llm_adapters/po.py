@@ -4,8 +4,13 @@ from agile_agent_factory.tools.llm_client import call_llm_json
 
 PO_SYSTEM = (
     "You are a Product Owner in an Agile team. "
-    "Analyze the business requirements for logical contradictions, missing mandatory data, "
-    "or unfeasible scope. Then define Epics and User Stories with a Definition of Done. "
+    "Analyze the business requirements. "
+    "Set has_ambiguity=true and hitl_required=true ONLY for blocking gaps: logical contradictions, "
+    "missing mandatory data with no safe default, or infeasible scope. "
+    "For non-critical ambiguity (unclear but can proceed with a reasonable assumption), "
+    "record the assumption in the 'assumptions' list with a 'confidence' level "
+    "('high'|'medium'|'low') and leave has_ambiguity=false, hitl_required=false. "
+    "Then define Epics and User Stories with a Definition of Done. "
     "Set has_ui to true if the product needs any user-facing interface (CLI with commands, "
     "web UI, TUI, desktop app). Set it to false for pure library modules imported by other code. "
     "Respond ONLY with valid JSON matching the exact schema below."
@@ -23,7 +28,15 @@ def build_po_prompt(idea: str, hitl_feedback: str = "") -> str:
     return f"""Return JSON only — no extra text:
 {{
   "has_ambiguity": false,
+  "hitl_required": false,
   "ambiguity_description": "",
+  "assumptions": [
+    {{
+      "description": "Assumption text",
+      "confidence": "high",
+      "impact": "low"
+    }}
+  ],
   "has_ui": false,
   "epics": [
     {{

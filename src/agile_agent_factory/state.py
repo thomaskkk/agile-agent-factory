@@ -50,6 +50,9 @@ class StoryState(TypedDict, total=False):
     review_status: str  # "pending_review" | "rework_needed" — only meaningful in code_review column
     hitl_type: str  # "refinement" | "intervention" | "quota" | None
     hitl_feedback: str
+    regression_blockers: list  # cross-story test failures quarantined for later resolution
+    assumption_ledger: list  # recorded PO assumptions when proceeding under ambiguity
+    unresolved_risk_score: float  # 0.0–1.0; above ASSUMPTION_RISK_THRESHOLD → HITL
 
 
 class PipelineState(TypedDict, total=False):

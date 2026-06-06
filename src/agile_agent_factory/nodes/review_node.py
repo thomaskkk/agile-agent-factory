@@ -13,6 +13,73 @@ from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
 
 
+# --------------------------------------------------------------------------- #
+# Milestone 5 — Reviewer verdict classification helpers                        #
+# --------------------------------------------------------------------------- #
+
+def _is_out_of_scope_rejection(reason: str, write_scope: list[str]) -> bool:
+    """Layer 1: True when the rejection only cites files outside write_scope."""
+    if not write_scope or not reason:
+        return False
+    # Extract any file paths from the reason string
+    cited = re.findall(r"(?:app|tests)/[\w/]+\.py", reason)
+    if not cited:
+        return False
+    scope_set = set(write_scope)
+    # If ALL cited files are outside the scope → out-of-scope rejection
+    return all(f not in scope_set for f in cited)
+
+
+def _is_vague_rejection(reason: str, story_criteria: list[str]) -> bool:
+    """Layer 2: True only when the rejection has NO concrete anchor at all.
+
+    Concrete anchors: file paths, test function names, criterion text excerpts,
+    or any domain-specific technical term (test/function/class/import/assertion/criteria).
+    Generic phrases with no such anchor are vague; anything with at least one anchor counts.
+    """
+    if not reason.strip():
+        return True
+    if len(reason.strip()) < 10:
+        return True
+    # File path or underscore_test_name pattern
+    has_file_path = bool(re.search(r"(?:app|tests)/[\w/]+\.py", reason))
+    has_test_name = bool(re.search(r"\btest_\w+\b", reason))
+    has_criterion_text = any(
+        len(first_line := c.strip().splitlines()[0]) > 6 and first_line.lower() in reason.lower()
+        for c in (story_criteria or [])
+    )
+    # Domain terms that indicate the reviewer is pointing at something specific
+    has_technical_anchor = bool(re.search(
+        r"\b(test|function|class|method|import|assert|criteria|endpoint|module|"
+        r"acceptance|definition|behavior|missing|failing|error|exception|return)\b",
+        reason, re.IGNORECASE,
+    ))
+    return not (has_file_path or has_test_name or has_criterion_text or has_technical_anchor)
+
+
+def _filter_rejection(
+    reason: str,
+    write_scope: list[str],
+    story_criteria: list[str],
+    story_key: str,
+) -> tuple[bool, str]:
+    """Apply layers 1–2 to a rejection verdict.
+
+    Returns (should_count, filtered_reason):
+      should_count=False → don't consume a retry (filtered by layer 1 or 2)
+      should_count=True  → genuine rejection; consume a retry
+    """
+    if _is_out_of_scope_rejection(reason, write_scope):
+        log(f"Review: layer-1 filter — rejection cites only out-of-scope files for {story_key}. Not counting.")
+        return False, reason
+
+    if _is_vague_rejection(reason, story_criteria):
+        log(f"Review: layer-2 filter — rejection has no concrete anchor for {story_key}. Not counting.")
+        return False, reason
+
+    return True, reason
+
+
 def review_node(state: PipelineState) -> dict:
     """Reviewer agent: LLM audit of generated code against the DoD for ONE story."""
     from langgraph.types import interrupt
@@ -49,6 +116,26 @@ def review_node(state: PipelineState) -> dict:
 
     approved = result.payload.get("approved", False)
     reason = result.payload.get("reason", "")
+
+    if not approved:
+        # Milestone 5a: 3-layer filter before counting as a real rejection
+        should_count, reason = _filter_rejection(reason, write_scope, story_criteria, sk)
+
+        if not should_count:
+            # Filtered — don't increment retry counter; log and proceed (treat as approved for routing)
+            log(f"Review rejection filtered out for {sk} — not counting toward retry budget.")
+            # Post an informational note
+            try:
+                jira.add_comment_adf(
+                    sk,
+                    make_adf_doc(
+                        f"Review verdict filtered (out-of-scope or vague — see reason below). "
+                        f"Story advancing without consuming retry budget.\n\nFiltered reason: {reason}"
+                    ),
+                )
+            except Exception:
+                pass
+            approved = True  # treat as approved for routing purposes
 
     if not approved and review_retries < MAX_REVIEW_RETRIES:
         cycle = review_retries + 1

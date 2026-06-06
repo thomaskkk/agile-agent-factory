@@ -143,3 +143,108 @@ def test_writes_business_intent(tmp_path, monkeypatch, mock_jira):
     assert intent_file.exists(), "BP_BUSINESS_INTENT must be written after provisioning"
     content = intent_file.read_text()
     assert "kanban board app" in content
+
+
+def test_non_critical_ambiguity_records_assumption_not_hitl(tmp_path, monkeypatch, mock_jira):
+    """When PO returns hitl_required=False with assumptions, no HITL fires and ledger is recorded."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build a todo app.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+    monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "business_intent.md")
+
+    llm_response = {
+        "has_ambiguity": False,
+        "hitl_required": False,
+        "ambiguity_description": "",
+        "assumptions": [
+            {"description": "App targets Linux only (unspecified in requirements)", "confidence": "high", "impact": "low"}
+        ],
+        "has_ui": False,
+        "epics": [
+            {"title": "Core", "description": "Main", "stories": [
+                {"title": "Add task", "description": "As a user...", "definition_of_done": ["saved"]}
+            ]}
+        ],
+    }
+
+    jira = mock_jira
+    jira.create_issue.side_effect = [{"key": "TD-1"}, {"key": "TD-2"}]
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, {"status": "READY", "current_phase": None,
+                                              "story_keys": [], "epic_keys": [],
+                                              "blocking_issue_key": None, "subtasks": {}, "review_retries": 0})
+
+    assert result.payload.get("hitl_required") is not True
+    assert len(result.payload.get("assumption_ledger", [])) == 1
+    assert result.payload["assumption_ledger"][0]["confidence"] == "high"
+
+
+def test_must_escalate_ambiguity_sets_hitl_required(tmp_path, monkeypatch, mock_jira):
+    """When PO returns hitl_required=True, the result carries hitl_required=True."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build something.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+
+    llm_response = {
+        "has_ambiguity": True,
+        "hitl_required": True,
+        "ambiguity_description": "Scope contradicts budget",
+        "assumptions": [],
+        "has_ui": False,
+        "epics": [],
+    }
+
+    jira = mock_jira
+    jira.create_issue.return_value = {"key": "HITL-1"}
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, {"status": "READY", "current_phase": None,
+                                              "story_keys": [], "epic_keys": [],
+                                              "blocking_issue_key": None, "subtasks": {}, "review_retries": 0})
+
+    assert result.payload.get("hitl_required") is True
+
+
+def test_risk_score_computed_from_assumptions(tmp_path, monkeypatch, mock_jira):
+    """unresolved_risk_score must be computed from assumption confidence levels."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build todo.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+    monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "bi.md")
+
+    # low-confidence assumption → high risk
+    llm_response = {
+        "has_ambiguity": False,
+        "hitl_required": False,
+        "ambiguity_description": "",
+        "assumptions": [
+            {"description": "guessing the auth strategy", "confidence": "low", "impact": "high"}
+        ],
+        "has_ui": False,
+        "epics": [
+            {"title": "Core", "description": "desc", "stories": [
+                {"title": "Task", "description": "desc", "definition_of_done": ["done"]}
+            ]}
+        ],
+    }
+
+    jira = mock_jira
+    jira.create_issue.side_effect = [{"key": "T-1"}, {"key": "T-2"}]
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, {"status": "READY", "current_phase": None,
+                                              "story_keys": [], "epic_keys": [],
+                                              "blocking_issue_key": None, "subtasks": {}, "review_retries": 0})
+
+    score = result.payload.get("unresolved_risk_score", 0.0)
+    assert score > 0.5, f"Low-confidence assumption should produce high risk score, got {score}"

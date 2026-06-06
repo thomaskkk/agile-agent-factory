@@ -66,6 +66,11 @@ README_MODEL = os.environ.get("README_MODEL", "")
 MAX_RETRIES_DEV = int(os.environ.get("MAX_RETRIES_DEV", "2"))
 MAX_REVIEW_RETRIES = int(os.environ.get("MAX_REVIEW_RETRIES", "2"))
 MAX_CORRECTION_FAILURES = int(os.environ.get("MAX_CORRECTION_FAILURES", "2"))
+# Separate budget for mechanical/strategy retries (dep re-resolution, stub scaffolding,
+# truncation retries) — these don't count toward MAX_RETRIES_DEV.
+MAX_STRATEGY_RETRIES = int(os.environ.get("MAX_STRATEGY_RETRIES", "3"))
+# PO assumption policy: risk score above this threshold escalates to HITL; below → proceed.
+ASSUMPTION_RISK_THRESHOLD = float(os.environ.get("ASSUMPTION_RISK_THRESHOLD", "0.7"))
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 UV_BIN = os.environ.get("UV_BIN", "uv")
 

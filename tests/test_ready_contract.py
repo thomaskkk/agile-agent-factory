@@ -59,6 +59,44 @@ def test_repairable_missing_acceptance_does_not_trigger_hitl():
     assert "hitl_type" not in update
 
 
+def test_missing_story_summary_routes_to_qa():
+    update = readiness_repair_update(["story_summary is required."])
+    assert update.get("refinement_qa_done") is False
+    assert "hitl_type" not in update
+
+
+def test_missing_user_intent_routes_to_qa():
+    update = readiness_repair_update(["full_user_intent is required."])
+    assert update.get("refinement_qa_done") is False
+    assert "hitl_type" not in update
+
+
+def test_missing_in_scope_behavior_routes_to_qa():
+    update = readiness_repair_update(["in_scope_behavior must include at least one explicit behavior."])
+    assert update.get("refinement_qa_done") is False
+    assert "hitl_type" not in update
+
+
+def test_missing_ui_flow_routes_to_ux():
+    update = readiness_repair_update(["UI stories require a mapped ui_flow_reference."])
+    assert update.get("refinement_ux_done") is False
+    assert "hitl_type" not in update
+
+
+def test_unsafe_target_interfaces_triggers_hitl():
+    update = readiness_repair_update([
+        "target_interfaces.paths contains path-unsafe value: ../app/tasks.py",
+    ])
+    assert update.get("hitl_type") == "refinement"
+
+
+def test_open_questions_routes_to_qa_when_not_ui():
+    update = readiness_repair_update(["open_questions must be empty before tech_design."])
+    # open_questions without UI/flow content → QA can fix by regenerating
+    assert update.get("refinement_qa_done") is False
+    assert "hitl_type" not in update
+
+
 from agile_agent_factory.agents.ready_contract import build_ready_contract
 
 

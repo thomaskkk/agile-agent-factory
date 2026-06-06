@@ -163,8 +163,8 @@ def test_call_llm_retries_and_recovers_after_transient_quota(mocker):
     mock_sleep.assert_called_once()  # backed off exactly once before the successful retry
 
 
-def test_call_openai_raises_quota_exceeded_on_api_timeout(mocker):
-    """openai.APITimeoutError from OpenAI must be caught and raised as LLMQuotaExceeded."""
+def test_call_openai_raises_transient_error_on_api_timeout(mocker):
+    """openai.APITimeoutError must be caught and raised as LLMTransientError (not quota)."""
     import httpx
     import openai as openai_sdk
     import agile_agent_factory.tools.llm_client as llm_client
@@ -175,14 +175,14 @@ def test_call_openai_raises_quota_exceeded_on_api_timeout(mocker):
         request=mock_request
     )
 
-    with pytest.raises(llm_client.LLMQuotaExceeded) as exc_info:
+    with pytest.raises(llm_client.LLMTransientError) as exc_info:
         llm_client._call_openai("prompt")
     assert exc_info.value.provider == "openai"
     assert "Network error" in str(exc_info.value)
 
 
-def test_call_openai_raises_quota_exceeded_on_connection_error(mocker):
-    """openai.APIConnectionError from OpenAI must be caught and raised as LLMQuotaExceeded."""
+def test_call_openai_raises_transient_error_on_connection_error(mocker):
+    """openai.APIConnectionError must be caught and raised as LLMTransientError (not quota)."""
     import httpx
     import openai as openai_sdk
     import agile_agent_factory.tools.llm_client as llm_client
@@ -193,7 +193,7 @@ def test_call_openai_raises_quota_exceeded_on_connection_error(mocker):
         request=mock_request
     )
 
-    with pytest.raises(llm_client.LLMQuotaExceeded) as exc_info:
+    with pytest.raises(llm_client.LLMTransientError) as exc_info:
         llm_client._call_openai("prompt")
     assert exc_info.value.provider == "openai"
     assert "Network error" in str(exc_info.value)
@@ -300,3 +300,89 @@ def test_call_llm_json_passes_prefill_to_call_llm(mocker):
     import agile_agent_factory.tools.llm_client as llm_client
     llm_client.call_llm_json("prompt", prefill="[")
     assert mock_call_llm.call_args[1]["prefill"] == "["
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3b: LLMTransientError is retried by call_llm (not treated as quota)
+# ---------------------------------------------------------------------------
+
+def test_transient_error_retried_not_propagated_as_quota(mocker):
+    """LLMTransientError should be retried; if Anthropic then recovers, call succeeds."""
+    import anthropic as anthropic_sdk
+    import agile_agent_factory.tools.llm_client as llm_client
+
+    mock_sleep = mocker.patch("agile_agent_factory.tools.llm_client.time.sleep")
+    ok_resp = mocker.MagicMock(content="recovered")
+
+    mock_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatAnthropic")
+    mock_chat.return_value.invoke.return_value = ok_resp
+
+    # Simulate OpenAI raising LLMTransientError, Anthropic succeeding
+    mock_openai_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatOpenAI")
+    mock_openai_chat.return_value.invoke.return_value = mocker.MagicMock(content="ok from openai")
+
+    # Patch _call_with_fallback to raise LLMTransientError once then succeed
+    call_count = [0]
+    original_fallback = llm_client._call_with_fallback
+
+    def fake_fallback(prompt, system="", model=None, prefill=""):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise llm_client.LLMTransientError("openai", "timeout")
+        return "recovered"
+
+    mocker.patch("agile_agent_factory.tools.llm_client._call_with_fallback", side_effect=fake_fallback)
+
+    result = llm_client.call_llm("prompt")
+    assert result == "recovered"
+    mock_sleep.assert_called_once()  # backed off before retry
+
+
+# ---------------------------------------------------------------------------
+# Milestone 4: comma-separated model chain
+# ---------------------------------------------------------------------------
+
+def test_comma_chain_tries_first_model_first(mocker):
+    """First model in chain is tried before falling back."""
+    import agile_agent_factory.tools.llm_client as llm_client
+
+    mock_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatAnthropic")
+    mock_chat.return_value.invoke.return_value = mocker.MagicMock(content="first model response")
+
+    result = llm_client.call_llm("prompt", model="claude-sonnet-4-6,claude-haiku-4-5-20251001")
+    assert result == "first model response"
+    assert mock_chat.call_args[1]["model"] == "claude-sonnet-4-6"
+
+
+def test_comma_chain_falls_back_when_first_quota_exceeded(mocker):
+    """When first model in chain is quota'd, second is tried."""
+    import anthropic as anthropic_sdk
+    import agile_agent_factory.tools.llm_client as llm_client
+
+    rate_limit = anthropic_sdk.RateLimitError(
+        message="rate limit", response=mocker.MagicMock(status_code=429, headers={}), body={}
+    )
+    ok_resp = mocker.MagicMock(content="fallback model response")
+
+    mock_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatAnthropic")
+    mock_chat.return_value.invoke.side_effect = [rate_limit, ok_resp]
+
+    result = llm_client.call_llm("prompt", model="claude-opus-4-8,claude-sonnet-4-6")
+    assert result == "fallback model response"
+
+
+def test_comma_chain_all_quota_raises(mocker):
+    """When all models in chain are quota'd, LLMQuotaExceeded is raised."""
+    import anthropic as anthropic_sdk
+    import agile_agent_factory.tools.llm_client as llm_client
+
+    mocker.patch("agile_agent_factory.tools.llm_client.time.sleep")
+    rate_limit = anthropic_sdk.RateLimitError(
+        message="rate limit", response=mocker.MagicMock(status_code=429, headers={}), body={}
+    )
+
+    mock_chat = mocker.patch("agile_agent_factory.tools.llm_client.ChatAnthropic")
+    mock_chat.return_value.invoke.side_effect = rate_limit
+
+    with pytest.raises(llm_client.LLMQuotaExceeded):
+        llm_client.call_llm("prompt", model="claude-sonnet-4-6,claude-haiku-4-5-20251001")

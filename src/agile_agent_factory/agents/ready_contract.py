@@ -101,19 +101,60 @@ def validate_ready_contract(contract: dict[str, Any]) -> list[str]:
 
 
 def readiness_repair_update(errors: list[str]) -> dict[str, Any]:
-    """Map validation failures to the upstream refinement step that can repair them."""
+    """Map validation failures to the upstream refinement step that can repair them.
+
+    Routes each error class to the responsible agent (QA or UX) for re-generation.
+    Only escalates to HITL for genuinely irreducible failures or unsafe target_interfaces.
+    """
     update: dict[str, Any] = {
         "ready_validated": False,
         "ready_validation_errors": errors,
     }
     joined = " ".join(errors).lower()
-    if "acceptance_criteria" in joined or "testable behavior" in joined or "observable expected behavior" in joined:
+
+    # QA-repairable: criteria, summary, intent, scope, testable/observable behavior,
+    # and open_questions that reference QA-owned fields
+    _QA_PATTERNS = (
+        "acceptance_criteria",
+        "testable behavior",
+        "observable expected behavior",
+        "story_summary",
+        "full_user_intent",
+        "in_scope_behavior",
+        "out_of_scope_behavior",
+    )
+    if any(p in joined for p in _QA_PATTERNS):
         update["refinement_qa_done"] = False
-    if "ui" in joined and "flow" in joined:
+
+    # open_questions: route by content — UI flow → UX, everything else → QA
+    if "open_questions" in joined:
+        # Check the individual error messages to see if any open_question is UX-specific
+        ux_q = any(
+            "ui" in e.lower() and "flow" in e.lower()
+            for e in errors
+            if "open" in e.lower() or "question" in e.lower()
+        )
+        if ux_q:
+            update["refinement_ux_done"] = False
+        else:
+            # QA can regenerate summary/intent/criteria to clear the open questions
+            update["refinement_qa_done"] = False
+
+    # UX-repairable: missing UI flow reference
+    if ("ui" in joined and "flow" in joined) or "ui_flow_reference" in joined:
         update["refinement_ux_done"] = False
+
+    # Escalate to HITL only when: unsafe target_interfaces AND no upstream agent can fix it
     can_repair_upstream = "refinement_qa_done" in update or "refinement_ux_done" in update
-    if not can_repair_upstream and ("open_questions" in joined or "target_interfaces" in joined):
+    has_unsafe_interfaces = "target_interfaces" in joined and (
+        "path-unsafe" in joined or "unsafe import" in joined or "must be" in joined
+    )
+    if has_unsafe_interfaces and not can_repair_upstream:
         update["hitl_type"] = "refinement"
+    elif not can_repair_upstream and "target_interfaces" in joined:
+        # target_interfaces structural errors (not path-unsafe) — escalate
+        update["hitl_type"] = "refinement"
+
     return update
 
 

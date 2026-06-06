@@ -11,7 +11,7 @@ everything as the stable public surface that graph.py imports.
 
 from __future__ import annotations
 
-from agile_agent_factory.config import PRODUCT_ROOT, WIP_LIMITS
+from agile_agent_factory.config import PRODUCT_ROOT, WIP_LIMITS, ASSUMPTION_RISK_THRESHOLD
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
@@ -60,9 +60,16 @@ def po_node(state: PipelineState) -> dict:
         raise_quota_interrupt(jira, None, e)
         result = analyze_and_provision(jira, legacy)
 
-    if result.payload.get("hitl_required"):
+    # Milestone 7: risk-threshold policy gate replaces binary hitl_required flag.
+    # hitl_required=True OR risk_score above threshold → interrupt; otherwise proceed under assumptions.
+    hitl_required = result.payload.get("hitl_required")
+    risk_score = result.payload.get("unresolved_risk_score", 0.0)
+    if hitl_required or risk_score > ASSUMPTION_RISK_THRESHOLD:
         blocking_key = result.payload.get("blocking_issue_key")
-        log(f"PO ambiguity detected. Interrupting for human input. Blocking: {blocking_key}")
+        log(
+            f"PO ambiguity detected (hitl_required={hitl_required}, risk_score={risk_score:.2f}). "
+            f"Interrupting for human input. Blocking: {blocking_key}"
+        )
         feedback = interrupt({"type": "refinement", "blocking_key": blocking_key})
         legacy["hitl_feedback"] = feedback or ""
         try:

@@ -73,3 +73,35 @@ def test_run_pytest_no_extra_packages_has_no_with_flags(mocker):
 
     cmd = mock_run.call_args.args[0]
     assert not any(str(arg).startswith("--with") for arg in cmd)
+
+
+def test_run_pytest_with_test_targets_uses_targets_not_tests_dir(mocker):
+    mock_run = mocker.patch("agile_agent_factory.tools.pytest_runner.subprocess.run")
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = "1 passed"
+    mock_run.return_value.stderr = ""
+
+    import agile_agent_factory.tools.pytest_runner as pytest_runner
+    targets = ["tests/test_auth.py", "tests/test_users.py"]
+    pytest_runner.run_pytest(test_targets=targets)
+
+    cmd = mock_run.call_args.args[0]
+    assert "tests/test_auth.py" in cmd
+    assert "tests/test_users.py" in cmd
+    # tests_dir (the full directory path) must NOT appear when targets are given
+    full_tests_dir = str(pytest_runner.PRODUCT_ROOT / "tests")
+    assert full_tests_dir not in cmd
+
+
+def test_run_pytest_no_targets_defaults_to_tests_dir(mocker):
+    mock_run = mocker.patch("agile_agent_factory.tools.pytest_runner.subprocess.run")
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = ""
+    mock_run.return_value.stderr = ""
+
+    import agile_agent_factory.tools.pytest_runner as pytest_runner
+    pytest_runner.run_pytest()
+
+    cmd = mock_run.call_args.args[0]
+    full_tests_dir = str(pytest_runner.PRODUCT_ROOT / "tests")
+    assert full_tests_dir in cmd

@@ -10,7 +10,9 @@ BUSINESS_IDEA_PATH = PRODUCT_ROOT / "business_idea.md"
 
 _HITL_FALLBACK = {
     "has_ambiguity": False,
+    "hitl_required": False,
     "ambiguity_description": "",
+    "assumptions": [],
     "has_ui": False,
     "epics": [],
 }
@@ -33,8 +35,13 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
     hitl_feedback = state.get("hitl_feedback", "")
     result = analyze_business(idea, hitl_feedback, _HITL_FALLBACK)
 
-    if result.get("has_ambiguity"):
+    # Milestone 7: explicit hitl_required flag takes priority; fall back to has_ambiguity for compat
+    must_escalate = result.get("hitl_required") or result.get("has_ambiguity")
+    if must_escalate:
         return AgentResult(payload=_handle_upstream_hitl(jira, result.get("ambiguity_description", "Unknown ambiguity"), state))
+
+    # Record non-critical assumptions in the ledger; post as Jira notification
+    assumptions = [a for a in (result.get("assumptions") or []) if isinstance(a, dict)]
 
     epic_keys: list[str] = []
     story_keys: list[str] = []
@@ -77,6 +84,18 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
                 log(str(e))
 
     _write_business_intent(idea, result.get("has_ui", False), epic_keys, story_keys)
+
+    # Post assumption ledger as Jira notification when assumptions were made
+    if assumptions and epic_keys:
+        _post_assumption_ledger(jira, epic_keys[0], assumptions)
+
+    # Compute unresolved risk score: average confidence mapped to risk (low→high)
+    _RISK_MAP = {"high": 0.1, "medium": 0.5, "low": 0.9}
+    risk_score = (
+        sum(_RISK_MAP.get(a.get("confidence", "medium"), 0.5) for a in assumptions) / len(assumptions)
+        if assumptions else 0.0
+    )
+
     return AgentResult(payload={
         **state,
         "current_phase": "upstream_po_done",
@@ -84,6 +103,8 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
         "story_keys": story_keys,
         "has_ui": result.get("has_ui", False),
         "story_to_epic": story_to_epic,
+        "assumption_ledger": assumptions,
+        "unresolved_risk_score": risk_score,
     })
 
 
@@ -107,6 +128,20 @@ def _write_business_intent(idea: str, has_ui: bool, epic_keys: list, story_keys:
 """
     BP_BUSINESS_INTENT.write_text(content)
     log(f"blueprint/context/business_intent.md written.")
+
+
+def _post_assumption_ledger(jira: JiraClient, issue_key: str, assumptions: list) -> None:
+    lines = [f"- [{a.get('confidence','?')} confidence] {a.get('description','')}" for a in assumptions]
+    try:
+        jira.add_comment_adf(
+            issue_key,
+            make_adf_doc(
+                "PO proceeding under the following recorded assumptions (not blocking):\n"
+                + "\n".join(lines)
+            ),
+        )
+    except Exception as e:
+        log(f"Could not post assumption ledger to {issue_key}: {e}")
 
 
 def _handle_upstream_hitl(jira: JiraClient, ambiguity: str, state: dict) -> dict:

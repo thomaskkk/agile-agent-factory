@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agile_agent_factory.config import (
-    MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, PRODUCT_ROOT, TEST_MODEL,
+    MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, MAX_STRATEGY_RETRIES, PRODUCT_ROOT, TEST_MODEL,
 )
 from agile_agent_factory.tools.jira_client import (
     JiraClient, make_adf_bullet_list, make_adf_doc, make_adf_heading,
@@ -15,12 +15,19 @@ from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _to_legacy_state
 from agile_agent_factory.nodes.dev_node import _load_dev_context, _correct_code, _extract_error_summary
+from agile_agent_factory.nodes.failure_recovery import classify_failure, _scaffold_missing_module
 
 
 def test_node(state: PipelineState) -> dict:
     """Run pytest with a correction loop for ONE story.
 
     On HITL resume, re-runs pytest from scratch (retries reset to 0).
+
+    Retry budget separation (Milestone 8):
+      retries             — genuine LLM-reasoning failures; escalates to intervention HITL
+      correction_failures — _correct_code producing zero usable files; its own HITL trigger
+      strategy_retries    — mechanical (dep re-resolve, stub scaffold, truncation retry);
+                            these do NOT consume retries or correction_failures
     """
     from langgraph.types import interrupt
 
@@ -31,13 +38,70 @@ def test_node(state: PipelineState) -> dict:
     blueprint = _load_dev_context(sk)
     deps = resolve_dependencies(_to_legacy_state(state, sk), PRODUCT_ROOT)
 
+    # Derive story-scoped test target from test_contract (Milestone 2)
+    tc = story.get("test_contract", {})
+    story_test_file = tc.get("test_file") if tc else None
+    write_scope: list[str] = []
+    if tc:
+        if story_test_file:
+            write_scope.append(story_test_file)
+        for imp in (tc.get("target_imports") or []):
+            if isinstance(imp, str) and imp.strip():
+                path_str = imp.split("import")[-1].strip().replace(".", "/") + ".py"
+                if path_str not in write_scope:
+                    write_scope.append(path_str)
+
     retries = 0
     correction_failures = 0
+    strategy_retries = 0
     last_output: str | None = None
 
     while True:
+        # --- Run pytest (targeted first, then full suite) ---
         if last_output is None:
-            exit_code, output = run_pytest(deps)
+            if story_test_file:
+                # Stage 1: targeted run (story-scoped, fast signal)
+                target_path = str(PRODUCT_ROOT / story_test_file)
+                t_exit, t_output = run_pytest(deps, test_targets=[target_path])
+                if t_exit != 0:
+                    # Targeted failed — feed to correction loop
+                    exit_code, output = t_exit, t_output
+                else:
+                    # Stage 2: full suite to catch regressions
+                    exit_code, output = run_pytest(deps)
+                    if exit_code != 0:
+                        # Targeted green, full suite red — classify the regression
+                        failure_class = classify_failure(exit_code, output)
+                        tb_files = _failing_files_in_output(output)
+                        in_scope = any(f in write_scope for f in tb_files)
+                        if in_scope:
+                            # Our write-scope still has issues — keep iterating correction
+                            log(f"Full suite regression in write-scope for {sk} — continuing correction.")
+                        else:
+                            # Cross-story regression — quarantine and advance
+                            log(f"Cross-story regression detected for {sk}; quarantining.")
+                            blocker_ids = [f for f in tb_files if f not in write_scope] or ["unclassified"]
+                            try:
+                                jira.add_comment_adf(
+                                    sk,
+                                    make_adf_doc(
+                                        f"Story targeted tests passed. Full suite has cross-story regression "
+                                        f"in: {', '.join(blocker_ids)}. Story advancing (quarantined)."
+                                    ),
+                                )
+                            except Exception:
+                                pass
+                            _safe_transition(jira, sk, WorkflowState.TO_CODE_REVIEW)
+                            for ek in state.get("epic_keys", []):
+                                _safe_transition(jira, ek, WorkflowState.TO_CODE_REVIEW)
+                            return {
+                                "stories": {sk: {
+                                    "column": "code_review",
+                                    "regression_blockers": blocker_ids,
+                                }}
+                            }
+            else:
+                exit_code, output = run_pytest(deps)
         else:
             exit_code, output = 1, last_output
 
@@ -53,7 +117,7 @@ def test_node(state: PipelineState) -> dict:
             _safe_transition(jira, sk, WorkflowState.TO_CODE_REVIEW)
             for ek in state.get("epic_keys", []):
                 _safe_transition(jira, ek, WorkflowState.TO_CODE_REVIEW)
-            return {"stories": {sk: {"column": "code_review"}}}
+            return {"stories": {sk: {"column": "code_review", "regression_blockers": []}}}
 
         if exit_code in (4, 5) and last_output is None:
             log(f"pytest exit code {exit_code}: collection error.")
@@ -62,6 +126,28 @@ def test_node(state: PipelineState) -> dict:
                 "This is an import or syntax error in the test or app modules shown above. "
                 "Fix the import/definition mismatch (or generate the missing module/test) so collection succeeds."
             )
+
+        # --- Mechanical failure recovery (before consuming LLM reasoning budget) ---
+        failure_class = classify_failure(exit_code, output)
+        log(f"Failure class for {sk}: {failure_class}.")
+
+        if failure_class == "missing_dependency":
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                log(f"Missing dependency detected — re-resolving deps for {sk}.")
+                deps = resolve_dependencies(_to_legacy_state(state, sk), PRODUCT_ROOT)
+                strategy_retries += 1
+                last_output = None
+                continue  # re-run pytest with updated deps; does NOT consume retries
+
+        elif failure_class == "missing_module":
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                scaffolded = _scaffold_missing_module(output)
+                if scaffolded:
+                    log(f"Scaffolded missing module(s) for {sk}: {scaffolded}.")
+                    strategy_retries += 1
+                    last_output = None
+                    continue  # re-run pytest; does NOT consume retries
+                # No "No module named" pattern found → fall through to LLM
 
         attempt = retries + 1
         log(f"pytest failed (attempt {attempt}/{MAX_RETRIES_DEV + 1}) for {sk}.")
@@ -81,11 +167,24 @@ def test_node(state: PipelineState) -> dict:
                 pass
             retries = 0
             correction_failures = 0
+            strategy_retries = 0
             last_output = None
             continue
 
         log("Requesting LLM-driven correction.")
-        corrected = _correct_code(blueprint, output, model=TEST_MODEL or None)
+        correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None)
+
+        # Truncation: strategy retry budget (not the LLM reasoning budget)
+        if correction_status == "truncated":
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                log(f"Correction truncated for {sk} — using strategy retry budget.")
+                strategy_retries += 1
+                last_output = output
+                continue
+            # Exhausted strategy budget — treat as correction failure
+            log(f"Truncation strategy budget exhausted for {sk} — treating as correction failure.")
+            correction_status = "empty"
+            corrected = []
 
         if not corrected:
             if correction_failures >= MAX_CORRECTION_FAILURES:
@@ -103,6 +202,7 @@ def test_node(state: PipelineState) -> dict:
                     pass
                 retries = 0
                 correction_failures = 0
+                strategy_retries = 0
                 last_output = None
                 continue
             correction_failures += 1
@@ -123,3 +223,11 @@ def test_node(state: PipelineState) -> dict:
         retries += 1
         correction_failures = 0
         last_output = None
+
+
+def _failing_files_in_output(output: str) -> list[str]:
+    """Extract relative file paths (app/*, tests/*) from a pytest failure output."""
+    import re
+    pattern = re.compile(r"\b((?:app|tests)/[\w/]+\.py)\b")
+    seen = dict.fromkeys(pattern.findall(output))
+    return list(seen)
