@@ -240,3 +240,182 @@ def test_reasoning_exhaustion_fires_hitl(monkeypatch):
 
     assert len(interrupt_calls) >= 1
     assert interrupt_calls[0]["type"] == "intervention"
+
+
+# ---------------------------------------------------------------------------
+# New deterministic classes (Milestone 1)
+# ---------------------------------------------------------------------------
+
+def test_fixture_not_found_scaffolded_without_consuming_retries(monkeypatch):
+    """fixture_not_found should scaffold conftest and retry without consuming retries."""
+    tn = _tn()
+
+    state = _make_state()
+    run_calls = [0]
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        run_calls[0] += 1
+        if run_calls[0] == 1:
+            return 1, "fixture 'db_session' not found"
+        return 0, "1 passed"
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+    monkeypatch.setattr(tn, "_scaffold_fixture", lambda output: ["tests/conftest.py"])
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert run_calls[0] == 2  # scaffold + success
+
+
+def test_missing_test_function_scaffolded_without_consuming_retries(monkeypatch):
+    """missing_test_function should scaffold stub and retry without consuming retries."""
+    tn = _tn()
+
+    state = _make_state()
+    run_calls = [0]
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        run_calls[0] += 1
+        if run_calls[0] == 1:
+            return 1, "ERRORS\n'test_login' not found in tests/test_auth.py"
+        return 0, "1 passed"
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+    monkeypatch.setattr(tn, "_scaffold_missing_test_function", lambda output, tf: ["tests/test_auth.py"])
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert run_calls[0] == 2
+
+
+def test_namespace_collision_reruns_dep_resolution_without_consuming_retries(monkeypatch):
+    """namespace_collision should re-resolve deps and retry without consuming retries."""
+    tn = _tn()
+
+    state = _make_state()
+    run_calls = [0]
+    dep_resolve_calls = [0]
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        run_calls[0] += 1
+        if run_calls[0] == 1:
+            return 1, "import app.models\nimport app.models\nduplicate: app.models referenced twice"
+        return 0, "1 passed"
+
+    def fake_resolve(legacy_state, root):
+        dep_resolve_calls[0] += 1
+        return []
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "")
+    monkeypatch.setattr(tn, "resolve_dependencies", fake_resolve)
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert run_calls[0] == 2
+    # resolve_dependencies called at start + once for collision recovery
+    assert dep_resolve_calls[0] >= 2
+
+
+def test_syntax_error_uses_targeted_llm_hint_not_retries(monkeypatch):
+    """syntax_error should send a targeted hint to _correct_code using strategy_retries."""
+    tn = _tn()
+
+    state = _make_state()
+    run_calls = [0]
+    correct_calls = []
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        run_calls[0] += 1
+        if run_calls[0] == 1:
+            return 1, "SyntaxError: invalid syntax\napp/models.py line 5"
+        return 0, "1 passed"
+
+    def fake_correct(blueprint, traceback, model=None):
+        correct_calls.append(traceback)
+        return ("ok", ["app/models.py"])
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_correct_code", fake_correct)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "bp")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert len(correct_calls) == 1
+    # Hint must be prepended to traceback
+    assert "TARGETED FIX REQUIRED" in correct_calls[0]
+    assert "SyntaxError" in correct_calls[0]
+
+
+def test_bad_import_signature_uses_targeted_llm_hint(monkeypatch):
+    """bad_import_signature should send a targeted hint to _correct_code."""
+    tn = _tn()
+
+    state = _make_state()
+    run_calls = [0]
+    correct_calls = []
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        run_calls[0] += 1
+        if run_calls[0] == 1:
+            return 1, "ImportError: cannot import name 'create_app' from 'app.factory'"
+        return 0, "1 passed"
+
+    def fake_correct(blueprint, traceback, model=None):
+        correct_calls.append(traceback)
+        return ("ok", ["app/factory.py"])
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_correct_code", fake_correct)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "bp")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert "TARGETED FIX REQUIRED" in correct_calls[0]
+    assert "cannot import name" in correct_calls[0]
+
+
+def test_collection_error_generic_uses_targeted_llm_hint(monkeypatch):
+    """collection_error_generic (exit 4/5 non-module) should send a targeted hint."""
+    tn = _tn()
+
+    state = _make_state()
+    run_calls = [0]
+    correct_calls = []
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        run_calls[0] += 1
+        if run_calls[0] == 1:
+            return 4, "collected 0 items / 1 error\nsome unexpected issue"
+        return 0, "1 passed"
+
+    def fake_correct(blueprint, traceback, model=None):
+        correct_calls.append(traceback)
+        return ("ok", ["app/something.py"])
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_correct_code", fake_correct)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "bp")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert "TARGETED FIX REQUIRED" in correct_calls[0]

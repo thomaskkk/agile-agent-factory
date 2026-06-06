@@ -15,7 +15,12 @@ from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _to_legacy_state
 from agile_agent_factory.nodes.dev_node import _load_dev_context, _correct_code, _extract_error_summary
-from agile_agent_factory.nodes.failure_recovery import classify_failure, _scaffold_missing_module
+from agile_agent_factory.nodes.failure_recovery import (
+    classify_failure,
+    _scaffold_missing_module,
+    _scaffold_fixture,
+    _scaffold_missing_test_function,
+)
 
 
 def test_node(state: PipelineState) -> dict:
@@ -149,6 +154,54 @@ def test_node(state: PipelineState) -> dict:
                     continue  # re-run pytest; does NOT consume retries
                 # No "No module named" pattern found → fall through to LLM
 
+        elif failure_class == "fixture_not_found":
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                scaffolded = _scaffold_fixture(output)
+                if scaffolded:
+                    log(f"Scaffolded fixture stub(s) for {sk}: {scaffolded}.")
+                    strategy_retries += 1
+                    last_output = None
+                    continue  # re-run pytest; does NOT consume retries
+                # Nothing scaffolded → fall through to LLM
+
+        elif failure_class == "missing_test_function":
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                scaffolded = _scaffold_missing_test_function(output, story_test_file)
+                if scaffolded:
+                    log(f"Scaffolded test function stub(s) for {sk}: {scaffolded}.")
+                    strategy_retries += 1
+                    last_output = None
+                    continue  # re-run pytest; does NOT consume retries
+                # Nothing scaffolded → fall through to LLM
+
+        elif failure_class == "namespace_collision":
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                log(f"Namespace collision detected for {sk} — re-resolving deps and retrying.")
+                deps = resolve_dependencies(_to_legacy_state(state, sk), PRODUCT_ROOT)
+                strategy_retries += 1
+                last_output = None
+                continue  # re-run pytest with fresh deps; does NOT consume retries
+
+        elif failure_class in ("syntax_error", "collection_error_generic", "bad_import_signature"):
+            if strategy_retries < MAX_STRATEGY_RETRIES:
+                hint = _failure_hint(failure_class)
+                log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
+                correction_status, corrected = _correct_code(
+                    blueprint, hint + output, model=TEST_MODEL or None
+                )
+                strategy_retries += 1
+
+                if correction_status == "truncated":
+                    log(f"Targeted hint correction truncated for {sk} — will retry.")
+                    last_output = output
+                    continue
+
+                if corrected:
+                    log(f"Targeted hint correction applied for {sk}: {corrected}.")
+                    last_output = None
+                    continue
+                # Nothing produced → fall through to ordinary LLM loop below
+
         attempt = retries + 1
         log(f"pytest failed (attempt {attempt}/{MAX_RETRIES_DEV + 1}) for {sk}.")
 
@@ -231,3 +284,27 @@ def _failing_files_in_output(output: str) -> list[str]:
     pattern = re.compile(r"\b((?:app|tests)/[\w/]+\.py)\b")
     seen = dict.fromkeys(pattern.findall(output))
     return list(seen)
+
+
+def _failure_hint(failure_class: str) -> str:
+    """Return a short targeted hint string to prepend to the LLM correction prompt."""
+    hints = {
+        "syntax_error": (
+            "TARGETED FIX REQUIRED: The pytest output below contains a SyntaxError. "
+            "Locate the exact file and line number, fix only the syntax error, "
+            "and do not alter any other logic.\n\n"
+        ),
+        "bad_import_signature": (
+            "TARGETED FIX REQUIRED: The pytest output below shows "
+            "'ImportError: cannot import name'. "
+            "Add or expose the missing name in the source module "
+            "(stub it if necessary) so the import succeeds. "
+            "Do not rename or remove existing names.\n\n"
+        ),
+        "collection_error_generic": (
+            "TARGETED FIX REQUIRED: pytest could not collect tests (exit code 4 or 5). "
+            "The output below describes the collection error. "
+            "Fix the import, syntax, or definition issue so pytest can collect the test file.\n\n"
+        ),
+    }
+    return hints.get(failure_class, "")
