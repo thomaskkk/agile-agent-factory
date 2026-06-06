@@ -8,6 +8,7 @@ _extract_error_summary, _load_dev_context) are shared with test_node.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from agile_agent_factory.config import PRODUCT_ROOT, DEV_MODEL, LLM_MAX_TOKENS, bp_task_path
@@ -53,13 +54,12 @@ def _resolve_namespace_collision(target: Path) -> bool:
 def _write_generated_files(files: list, write_scope: list[str] | None = None) -> list[str]:
     written: list[str] = []
     for f in files:
+        path_str = f.get("path", "")
+        if write_scope and path_str not in write_scope:
+            log(f"Dev: skipping out-of-scope write: {path_str} (not in write_scope)")
+            continue
         try:
-            target = normalize_generated_path(f["path"])
-            path_str = f["path"]
-            if write_scope:
-                if path_str not in write_scope:
-                    log(f"Dev: skipping out-of-scope write: {path_str} (not in write_scope)")
-                    continue
+            target = normalize_generated_path(path_str)
             target.parent.mkdir(parents=True, exist_ok=True)
             if not _resolve_namespace_collision(target):
                 continue
@@ -323,9 +323,11 @@ def dev_node(state: PipelineState) -> dict:
             write_scope.append(tc["test_file"])
         for imp in (tc.get("target_imports") or []):
             if isinstance(imp, str) and imp.strip():
-                path_str = imp.split("import")[-1].strip().replace(".", "/") + ".py"
-                if path_str not in write_scope:
-                    write_scope.append(path_str)
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
 
     try:
         from agile_agent_factory.tools.aider_client import is_available, run_task

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from agile_agent_factory.config import (
     MAX_CORRECTION_FAILURES, MAX_RETRIES_DEV, MAX_STRATEGY_RETRIES, PRODUCT_ROOT, TEST_MODEL,
 )
@@ -52,9 +54,11 @@ def test_node(state: PipelineState) -> dict:
             write_scope.append(story_test_file)
         for imp in (tc.get("target_imports") or []):
             if isinstance(imp, str) and imp.strip():
-                path_str = imp.split("import")[-1].strip().replace(".", "/") + ".py"
-                if path_str not in write_scope:
-                    write_scope.append(path_str)
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
 
     retries = 0
     correction_failures = 0

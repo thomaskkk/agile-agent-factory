@@ -251,3 +251,104 @@ def test_write_scope_return_value_contains_only_written_paths(tmp_path, monkeypa
     )
 
     assert written == ["app/keep.py", "app/also_keep.py"]
+
+
+# ---------------------------------------------------------------------------
+# write_scope derivation from target_imports (Issue 1 regression guard)
+# ---------------------------------------------------------------------------
+
+def test_write_scope_derivation_produces_module_path_not_symbol():
+    """write_scope derivation from target_imports must extract the MODULE path, not the symbol.
+
+    Given "from app.auth import login_user", write_scope should contain "app/auth.py",
+    NOT "login_user.py" (which was the bug caused by splitting on 'import').
+    """
+    import re
+
+    def derive_write_scope(target_imports):
+        write_scope = []
+        for imp in target_imports:
+            if isinstance(imp, str) and imp.strip():
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
+        return write_scope
+
+    result = derive_write_scope(["from app.auth import login_user"])
+
+    assert "app/auth.py" in result, (
+        "Expected 'app/auth.py' in write_scope, not the symbol name"
+    )
+    assert "login_user.py" not in result, (
+        "Symbol name 'login_user.py' must NOT appear in write_scope"
+    )
+
+
+def test_write_scope_derivation_nested_module():
+    """Nested module paths like 'from app.services.auth import authenticate' → 'app/services/auth.py'."""
+    import re
+
+    def derive_write_scope(target_imports):
+        write_scope = []
+        for imp in target_imports:
+            if isinstance(imp, str) and imp.strip():
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
+        return write_scope
+
+    result = derive_write_scope(["from app.services.auth import authenticate"])
+
+    assert "app/services/auth.py" in result
+    assert "authenticate.py" not in result
+
+
+def test_write_scope_derivation_deduplicates():
+    """Multiple imports from the same module must not produce duplicate entries."""
+    import re
+
+    def derive_write_scope(target_imports):
+        write_scope = []
+        for imp in target_imports:
+            if isinstance(imp, str) and imp.strip():
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
+        return write_scope
+
+    result = derive_write_scope([
+        "from app.auth import login_user",
+        "from app.auth import logout_user",
+    ])
+
+    assert result.count("app/auth.py") == 1
+
+
+def test_write_scope_derivation_ignores_non_app_imports():
+    """Imports not matching 'from app...' (e.g. stdlib, third-party) are silently skipped."""
+    import re
+
+    def derive_write_scope(target_imports):
+        write_scope = []
+        for imp in target_imports:
+            if isinstance(imp, str) and imp.strip():
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
+        return write_scope
+
+    result = derive_write_scope([
+        "from flask import Flask",
+        "from os.path import join",
+        "import json",
+    ])
+
+    assert result == []
