@@ -276,3 +276,71 @@ def test_code_review_rework_needed_routes_to_dev():
     assert len(result) == 1
     assert result[0].node == "dev"
     assert result[0].arg.get("active_story_key") == "F1-1"
+
+
+# ---------------------------------------------------------------------------
+# Refinement WIP gate — gated by tech_design capacity
+# ---------------------------------------------------------------------------
+
+def test_refinement_wip_gate_limits_qa_dispatches():
+    """With tech_design WIP=2 and 4 QA-pending stories (0 in tech_design), only 2 are dispatched."""
+    state = _make_state(
+        dict([
+            _story("F1-1", "refinement", has_ui=False, refinement_qa_done=False),
+            _story("F1-2", "refinement", has_ui=False, refinement_qa_done=False),
+            _story("F1-3", "refinement", has_ui=False, refinement_qa_done=False),
+            _story("F1-4", "refinement", has_ui=False, refinement_qa_done=False),
+        ]),
+        wip_limits={"tech_design": 2, "refinement": 3, "development": 2, "testing": 2, "code_review": 1},
+    )
+    result = dispatch_stories(state)
+    qa_sends = [s for s in result if s.node == "qa"]
+    assert len(qa_sends) == 2
+
+
+def test_refinement_gate_ready_always_route_regardless_of_wip():
+    """Gate-ready stories (qa_done and ux_done) route to refinement_gate even when tech_design is full."""
+    state = _make_state(
+        dict([
+            _story("F1-1", "refinement", has_ui=False, refinement_qa_done=True, refinement_ux_done=True),
+            _story("F1-2", "tech_design"),
+            _story("F1-3", "tech_design"),
+        ]),
+        wip_limits={"tech_design": 2, "refinement": 3, "development": 2, "testing": 2, "code_review": 1},
+    )
+    result = dispatch_stories(state)
+    gate_sends = [s for s in result if s.node == "refinement_gate"]
+    assert len(gate_sends) == 1
+    assert gate_sends[0].arg.get("active_story_key") == "F1-1"
+
+
+def test_refinement_ux_pending_always_routes():
+    """A story with qa_done=True, ux_done=False, has_ui=True always gets a UX send (already committed)."""
+    state = _make_state(
+        dict([
+            _story("F1-1", "refinement", has_ui=True, refinement_qa_done=True, refinement_ux_done=False),
+            _story("F1-2", "tech_design"),
+            _story("F1-3", "tech_design"),
+        ]),
+        wip_limits={"tech_design": 2, "refinement": 3, "development": 2, "testing": 2, "code_review": 1},
+    )
+    result = dispatch_stories(state)
+    ux_sends = [s for s in result if s.node == "ux"]
+    assert len(ux_sends) == 1
+    assert ux_sends[0].arg.get("active_story_key") == "F1-1"
+
+
+def test_refinement_gate_ready_and_ux_pending_reduce_qa_slots():
+    """gate_ready=1 + ux_pending=1 + tech_design current=0 + wip=2 → available for QA = 0."""
+    state = _make_state(
+        dict([
+            _story("F1-1", "refinement", has_ui=False, refinement_qa_done=True, refinement_ux_done=True),
+            _story("F1-2", "refinement", has_ui=True, refinement_qa_done=True, refinement_ux_done=False),
+            _story("F1-3", "refinement", has_ui=False, refinement_qa_done=False),
+            _story("F1-4", "refinement", has_ui=False, refinement_qa_done=False),
+        ]),
+        wip_limits={"tech_design": 2, "refinement": 3, "development": 2, "testing": 2, "code_review": 1},
+    )
+    result = dispatch_stories(state)
+    qa_sends = [s for s in result if s.node == "qa"]
+    assert len(qa_sends) == 0  # all 2 slots consumed by gate_ready(1) + ux_pending(1)

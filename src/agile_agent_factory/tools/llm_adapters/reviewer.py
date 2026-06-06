@@ -30,9 +30,12 @@ stories and MUST NOT cause this review to fail — note them as informational on
 """
 
     return f"""Review the generated code against the blueprint DoD.
-You are shown the COMPLETE contents of all generated files below — Python source,
-HTML templates, CSS, and JS. Do not assume any file type is missing unless it is
-absent from the list. Judge functional correctness and DoD coverage only.
+You are shown generated file contents below — Python source, HTML templates,
+CSS, and JS. Some files may be truncated for prompt budget and are labeled
+TRUNCATED when that happens. Do not assume a truncated file ends there in the
+real codebase, and do not fail review solely because visible content ends
+abruptly at a truncation point. Do not assume any file type is missing unless
+it is absent from the list. Judge functional correctness and DoD coverage only.
 {scope_instruction}
 Acceptance criteria (DoD):
 {dod_section[:8000]}

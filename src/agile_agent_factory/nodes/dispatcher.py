@@ -98,8 +98,29 @@ def dispatch_stories(state: PipelineState) -> list[Send] | str:
             continue
 
         if column == "refinement":
-            # Refinement: dispatch QA/UX sub-tasks per story (no WIP gate)
+            next_col = "tech_design"
+            wip_limit = wip_limits.get(next_col, 999)
+            current_in_next = _wip_count(stories, next_col)
+
+            gate_ready, ux_pending, qa_pending = [], [], []
             for story in ready:
+                qa_done = story.get("refinement_qa_done", False)
+                has_ui = story.get("has_ui", state.get("has_ui", False))
+                ux_done = story.get("refinement_ux_done", False) or not has_ui
+                if qa_done and ux_done:
+                    gate_ready.append(story)
+                elif qa_done:
+                    ux_pending.append(story)
+                else:
+                    qa_pending.append(story)
+
+            for story in gate_ready:
+                sends.extend(_dispatch_refinement(stories, story, state))
+            for story in ux_pending:
+                sends.extend(_dispatch_refinement(stories, story, state))
+
+            available_slots = max(0, wip_limit - current_in_next - len(gate_ready) - len(ux_pending))
+            for story in qa_pending[:available_slots]:
                 sends.extend(_dispatch_refinement(stories, story, state))
             continue
 

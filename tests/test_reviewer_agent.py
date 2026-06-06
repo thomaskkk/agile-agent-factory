@@ -274,3 +274,65 @@ def test_write_scope_absent_when_not_provided(tmp_path):
     assert captured
     assert "Story write scope" not in captured[0], \
         "Scope section must be absent when write_scope is not provided"
+
+
+def test_truncated_review_file_stays_on_line_boundary(tmp_path, monkeypatch):
+    """A capped file should not be sliced mid-line into syntactically misleading text."""
+    import agile_agent_factory.agents.reviewer_agent as ra
+
+    monkeypatch.setattr(ra, "REVIEW_MAX_FILE_CHARS", 45)
+
+    jira = _make_jira()
+    captured: list[str] = []
+
+    def capture_llm(prompt, **kwargs):
+        captured.append(prompt)
+        return {"approved": True, "rejection_reason": ""}
+
+    file_content = (
+        "def test_recipe_creation():\n"
+        "    recipe = Recipe(name='Soup')\n"
+        "    assert recipe.name == 'Soup'\n"
+    )
+
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_recipe_repository.py").write_text(file_content)
+
+        reviewer_agent.review_patch(jira, ["F3-999"])
+
+    assert captured, "call_llm_json was never called"
+    prompt = captured[0]
+    assert "recipe = Re" not in prompt
+    assert "TRUNCATED" in prompt
+
+
+def test_review_prompt_explains_truncation_behavior(tmp_path, monkeypatch):
+    """The reviewer prompt must not describe truncated excerpts as complete files."""
+    import agile_agent_factory.agents.reviewer_agent as ra
+
+    monkeypatch.setattr(ra, "REVIEW_MAX_FILE_CHARS", 20)
+
+    jira = _make_jira()
+    captured: list[str] = []
+
+    def capture_llm(prompt, **kwargs):
+        captured.append(prompt)
+        return {"approved": True, "rejection_reason": ""}
+
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "main.py").write_text("def handler():\n    return 'ok'\n")
+
+        reviewer_agent.review_patch(jira, ["F3-1000"])
+
+    assert captured, "call_llm_json was never called"
+    prompt = captured[0]
+    assert "COMPLETE contents" not in prompt
+    assert "do not fail review solely because visible content ends abruptly" in " ".join(prompt.split())

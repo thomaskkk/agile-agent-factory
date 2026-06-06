@@ -14,6 +14,18 @@ from agile_agent_factory.tools.workflow import WorkflowState
 _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return valid JSON — manual review required."}
 
 
+def _truncate_for_review(content: str, char_limit: int) -> tuple[str, bool]:
+    """Trim to a prompt budget without ending mid-line when possible."""
+    if len(content) <= char_limit:
+        return content, False
+
+    snippet = content[:char_limit]
+    newline = snippet.rfind("\n")
+    if newline > 0:
+        snippet = snippet[:newline]
+    return snippet.rstrip(), True
+
+
 def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> AgentResult:
     facade = JiraFacade(jira)
     facade.move_all(story_keys, WorkflowState.IN_CODE_REVIEW)
@@ -73,7 +85,14 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
 
     def _fence(path: str, content: str) -> str:
         lang = _LANG_MAP.get(Path(path).suffix.lower(), "")
-        return f"### {path}\n```{lang}\n{content[:REVIEW_MAX_FILE_CHARS]}\n```"
+        snippet, truncated = _truncate_for_review(content, REVIEW_MAX_FILE_CHARS)
+        header = f"### {path}"
+        if truncated:
+            header += f" (TRUNCATED: showing first {len(snippet)} of {len(content)} chars)"
+        block = f"{header}\n```{lang}\n{snippet}\n```"
+        if truncated:
+            block += "\n[TRUNCATED FOR REVIEW BUDGET]"
+        return block
 
     # Write-scope files are always included first so they are never truncated away.
     # Other files fill the remaining budget up to REVIEW_MAX_TOTAL_CHARS.
