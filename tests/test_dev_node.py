@@ -140,3 +140,114 @@ def test_correct_code_returns_empty_on_bad_json(tmp_path, monkeypatch):
 
     assert status == "empty"
     assert written == []
+
+
+# ---------------------------------------------------------------------------
+# _write_generated_files: write_scope enforcement (Milestone 2)
+# ---------------------------------------------------------------------------
+
+def test_write_scope_drops_out_of_scope_path(tmp_path, monkeypatch):
+    """Files whose path is NOT in write_scope must be silently skipped."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    written = _mod()._write_generated_files(
+        [
+            {"path": "app/allowed.py", "content": "# ok"},
+            {"path": "app/forbidden.py", "content": "# nope"},
+        ],
+        write_scope=["app/allowed.py"],
+    )
+
+    assert "app/allowed.py" in written
+    assert "app/forbidden.py" not in written
+    assert (tmp_path / "app" / "allowed.py").exists()
+    assert not (tmp_path / "app" / "forbidden.py").exists()
+
+
+def test_write_scope_logs_warning_for_skipped_file(tmp_path, monkeypatch, capsys):
+    """Skipping an out-of-scope write must emit a log warning."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    log_calls: list[str] = []
+    with patch("agile_agent_factory.nodes.dev_node.log", side_effect=log_calls.append):
+        _mod()._write_generated_files(
+            [{"path": "app/other.py", "content": "x = 1"}],
+            write_scope=["app/main.py"],
+        )
+
+    assert any("skipping out-of-scope write" in msg and "app/other.py" in msg for msg in log_calls)
+
+
+def test_write_scope_writes_in_scope_paths_normally(tmp_path, monkeypatch):
+    """Files whose path IS in write_scope must be written as normal."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    written = _mod()._write_generated_files(
+        [{"path": "app/service.py", "content": "# service"}],
+        write_scope=["app/service.py"],
+    )
+
+    assert "app/service.py" in written
+    assert (tmp_path / "app" / "service.py").exists()
+    assert (tmp_path / "app" / "service.py").read_text() == "# service"
+
+
+def test_write_scope_none_writes_all_paths(tmp_path, monkeypatch):
+    """When write_scope is None, all valid paths are written (backward compat)."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    written = _mod()._write_generated_files(
+        [
+            {"path": "app/a.py", "content": "a = 1"},
+            {"path": "app/b.py", "content": "b = 2"},
+        ],
+        write_scope=None,
+    )
+
+    assert "app/a.py" in written
+    assert "app/b.py" in written
+
+
+def test_write_scope_empty_list_writes_all_paths(tmp_path, monkeypatch):
+    """When write_scope is an empty list, all valid paths are written (backward compat)."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    written = _mod()._write_generated_files(
+        [
+            {"path": "app/c.py", "content": "c = 3"},
+            {"path": "app/d.py", "content": "d = 4"},
+        ],
+        write_scope=[],
+    )
+
+    assert "app/c.py" in written
+    assert "app/d.py" in written
+
+
+def test_write_scope_return_value_contains_only_written_paths(tmp_path, monkeypatch):
+    """Return value must only include paths actually written, not skipped ones."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    written = _mod()._write_generated_files(
+        [
+            {"path": "app/keep.py", "content": "# keep"},
+            {"path": "app/skip.py", "content": "# skip"},
+            {"path": "app/also_keep.py", "content": "# also keep"},
+        ],
+        write_scope=["app/keep.py", "app/also_keep.py"],
+    )
+
+    assert written == ["app/keep.py", "app/also_keep.py"]

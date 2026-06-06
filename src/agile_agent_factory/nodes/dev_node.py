@@ -50,17 +50,22 @@ def _resolve_namespace_collision(target: Path) -> bool:
     return True
 
 
-def _write_generated_files(files: list) -> list[str]:
+def _write_generated_files(files: list, write_scope: list[str] | None = None) -> list[str]:
     written: list[str] = []
     for f in files:
         try:
             target = normalize_generated_path(f["path"])
+            path_str = f["path"]
+            if write_scope:
+                if path_str not in write_scope:
+                    log(f"Dev: skipping out-of-scope write: {path_str} (not in write_scope)")
+                    continue
             target.parent.mkdir(parents=True, exist_ok=True)
             if not _resolve_namespace_collision(target):
                 continue
             target.write_text(f.get("content", ""))
             log(f"Wrote: {target}")
-            written.append(f["path"])
+            written.append(path_str)
         except (ValueError, KeyError) as e:
             log(f"Skipped invalid path {f.get('path', '?')}: {e}")
     return written
@@ -115,7 +120,7 @@ Blueprint:
 {blueprint}
 """
     files = call_llm_json(prompt, system=system, fallback=_FILE_FALLBACK, model=model)
-    _write_generated_files(files)
+    _write_generated_files(files, write_scope=write_scope)
 
 
 def _is_truncated_json(raw: str) -> bool:
@@ -175,7 +180,7 @@ def _parse_correction_response(raw: str) -> list | None:
     return None
 
 
-def _correct_code(blueprint: str, traceback: str, model: str | None = None) -> tuple[str, list[str]]:
+def _correct_code(blueprint: str, traceback: str, model: str | None = None, write_scope: list[str] | None = None) -> tuple[str, list[str]]:
     """Ask the LLM to fix failing tests.
 
     Returns (status, written_files):
@@ -275,7 +280,7 @@ Current source files:
         log("LLM correction returned no usable file entries — no files written.")
         return ("empty", [])
 
-    written = _write_generated_files(files)
+    written = _write_generated_files(files, write_scope=write_scope)
     log(f"Correction applied: {len(written)} file(s) updated.")
     return ("ok", written)
 
