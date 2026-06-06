@@ -8,6 +8,7 @@ _extract_error_summary, _load_dev_context) are shared with test_node.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from agile_agent_factory.config import PRODUCT_ROOT, DEV_MODEL, bp_task_path
 from agile_agent_factory.tools.jira_client import JiraClient
@@ -29,12 +30,34 @@ def _load_dev_context(story_key: str) -> str:
     return task_path.read_text() if task_path.exists() else ""
 
 
+def _resolve_namespace_collision(target: Path) -> bool:
+    """Prevent Python namespace collisions between same-named package dirs and .py files.
+
+    Writing X/__init__.py: removes X.py if it exists (package shadows the file).
+    Writing X.py: skips the write if X/__init__.py already exists (package wins).
+    Returns True to proceed, False to skip.
+    """
+    if target.name == "__init__.py":
+        shadow = target.parent.parent / (target.parent.name + ".py")
+        if shadow.exists():
+            log(f"Namespace collision: removing {shadow} (shadowed by package {target.parent}/)")
+            shadow.unlink()
+    else:
+        pkg_init = target.parent / target.stem / "__init__.py"
+        if pkg_init.exists():
+            log(f"Namespace collision: skipping {target} — {target.parent / target.stem}/ package already owns this namespace")
+            return False
+    return True
+
+
 def _write_generated_files(files: list) -> list[str]:
     written: list[str] = []
     for f in files:
         try:
             target = normalize_generated_path(f["path"])
             target.parent.mkdir(parents=True, exist_ok=True)
+            if not _resolve_namespace_collision(target):
+                continue
             target.write_text(f.get("content", ""))
             log(f"Wrote: {target}")
             written.append(f["path"])
