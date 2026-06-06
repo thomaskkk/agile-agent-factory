@@ -14,16 +14,18 @@ from agile_agent_factory.tools.workflow import WorkflowState
 _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return valid JSON — manual review required."}
 
 
-def _truncate_for_review(content: str, char_limit: int) -> tuple[str, bool]:
+def _truncate_for_review(content: str, char_limit: int | None) -> tuple[str, bool]:
     """Trim to a prompt budget without ending mid-line when possible."""
+    if char_limit is None:
+        return content, False
     if len(content) <= char_limit:
         return content, False
 
     snippet = content[:char_limit]
     newline = snippet.rfind("\n")
     if newline > 0:
-        snippet = snippet[:newline]
-    return snippet.rstrip(), True
+        snippet = snippet[:newline + 1]  # include the newline so snippet ends at a line boundary
+    return snippet, True
 
 
 def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[str] | None = None, story_key: str | None = None, write_scope: list[str] | None = None) -> AgentResult:
@@ -83,9 +85,9 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
         log("No generated files found for review.")
         return AgentResult(success=False, payload={"approved": False, "reason": "No generated files found."})
 
-    def _fence(path: str, content: str) -> str:
+    def _fence(path: str, content: str, char_limit: int | None = REVIEW_MAX_FILE_CHARS) -> str:
         lang = _LANG_MAP.get(Path(path).suffix.lower(), "")
-        snippet, truncated = _truncate_for_review(content, REVIEW_MAX_FILE_CHARS)
+        snippet, truncated = _truncate_for_review(content, char_limit)
         header = f"### {path}"
         if truncated:
             header += f" (TRUNCATED: showing first {len(snippet)} of {len(content)} chars)"
@@ -102,20 +104,49 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
 
     fences: list[str] = []
     total_chars = 0
+    truncated_log: list[tuple[str, int, int]] = []  # (path, orig_chars, shown_chars)
+    truncated_scope_files: list[str] = []
+
     for path, content in scope_items + other_items:
         if len(fences) >= REVIEW_MAX_FILES:
             break
-        fence = _fence(path, content)
+        char_limit = None if path in scope_set else REVIEW_MAX_FILE_CHARS
+        fence = _fence(path, content, char_limit=char_limit)
         if path not in scope_set and total_chars + len(fence) > REVIEW_MAX_TOTAL_CHARS:
             break
         fences.append(fence)
         total_chars += len(fence) + 2  # +2 for the \n\n separator
+        snippet, was_truncated = _truncate_for_review(content, char_limit)
+        if was_truncated:
+            truncated_log.append((path, len(content), len(snippet)))
+            if path in scope_set:
+                truncated_scope_files.append(path)
+
+    if truncated_log:
+        for tpath, orig, shown in truncated_log:
+            scope_marker = " [WRITE-SCOPE]" if tpath in scope_set else ""
+            log(f"Review truncation: {tpath} — {shown}/{orig} chars shown{scope_marker}")
 
     files_block = "\n\n".join(fences)
 
     result = generate_review(dod_section, files_block, write_scope, _REVIEW_FALLBACK)
     approved = result.get("approved", False)
     reason = result.get("rejection_reason", "")
+
+    if not approved and truncated_scope_files:
+        # Edge-case safety net: a write-scope file was truncated (shouldn't happen with
+        # char_limit=None, but guards against unforeseen budget overflows). Retry with
+        # scope-only context to avoid false rejection.
+        log(f"Review: write-scope truncation detected, retrying scope-only: {truncated_scope_files}")
+        scope_only_fences = [
+            _fence(p, generated[p], char_limit=None)
+            for p in scope_set
+            if p in generated
+        ]
+        scope_only_block = "\n\n".join(scope_only_fences)
+        result2 = generate_review(dod_section, scope_only_block, write_scope, _REVIEW_FALLBACK)
+        approved = result2.get("approved", False)
+        reason = result2.get("rejection_reason", "")
 
     if approved:
         log("Code review: APPROVED.")

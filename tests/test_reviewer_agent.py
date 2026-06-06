@@ -310,6 +310,166 @@ def test_truncated_review_file_stays_on_line_boundary(tmp_path, monkeypatch):
     assert "TRUNCATED" in prompt
 
 
+# ---------------------------------------------------------------------------
+# Task 1: _truncate_for_review None-guard
+# ---------------------------------------------------------------------------
+
+def test_truncate_for_review_none_limit_returns_full_content():
+    from agile_agent_factory.agents.reviewer_agent import _truncate_for_review
+    content = "line1\n" * 2000  # well over 8000 chars
+    snippet, truncated = _truncate_for_review(content, None)
+    assert snippet == content
+    assert truncated is False
+
+
+# ---------------------------------------------------------------------------
+# Task 2: write-scope full inclusion + context file truncation logging
+# ---------------------------------------------------------------------------
+
+def _fake_generate_capturing(captured: dict):
+    """Returns a side_effect function that records files_block and approves."""
+    def _side_effect(dod, fb, ws, fallback):
+        captured["fb"] = fb
+        return {"approved": True, "rejection_reason": ""}
+    return _side_effect
+
+
+def test_write_scope_file_never_truncated(tmp_path):
+    """A write-scope file larger than REVIEW_MAX_FILE_CHARS must appear in full."""
+    jira = MagicMock()
+    long_content = "x = 1\n" * 2000  # ~12 000 chars, well above 8000 limit
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_repo.py").write_text(long_content)
+
+    captured = {}
+    with patch("agile_agent_factory.agents.reviewer_agent.generate_review",
+               side_effect=_fake_generate_capturing(captured)), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"):
+        reviewer_agent.review_patch(jira, ["F1-1"], write_scope=["tests/test_repo.py"])
+
+    assert "[TRUNCATED FOR REVIEW BUDGET]" not in captured["fb"], (
+        "Write-scope file must not be truncated"
+    )
+    assert long_content.strip() in captured["fb"], (
+        "Full content of write-scope file must appear in files_block"
+    )
+
+
+def test_context_file_is_truncated_with_marker(tmp_path):
+    """A non-scope file larger than REVIEW_MAX_FILE_CHARS must be truncated with a marker."""
+    jira = MagicMock()
+    long_content = "x = 1\n" * 2000  # ~12 000 chars
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "app" / "big_module.py").write_text(long_content)
+    (tmp_path / "tests" / "test_small.py").write_text("def test_pass(): pass\n")
+
+    captured = {}
+    with patch("agile_agent_factory.agents.reviewer_agent.generate_review",
+               side_effect=_fake_generate_capturing(captured)), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"):
+        reviewer_agent.review_patch(jira, ["F1-1"], write_scope=["tests/test_small.py"])
+
+    assert "[TRUNCATED FOR REVIEW BUDGET]" in captured["fb"], (
+        "Context file exceeding REVIEW_MAX_FILE_CHARS must have truncation marker"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 3: scope-only retry guard
+# ---------------------------------------------------------------------------
+
+def test_truncated_scope_file_triggers_scope_only_retry(tmp_path):
+    """If a write-scope file ends up truncated (edge case), a scope-only retry fires."""
+    jira = MagicMock()
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_repo.py").write_text("def test_pass(): pass\n")
+
+    call_count = {"n": 0}
+    call_blocks: list[str] = []
+
+    def fake_generate(dod, fb, ws, fallback):
+        call_count["n"] += 1
+        call_blocks.append(fb)
+        if call_count["n"] == 1:
+            return {"approved": False, "rejection_reason": "syntax error in truncated section"}
+        return {"approved": True, "rejection_reason": ""}
+
+    original_truncate = reviewer_agent._truncate_for_review
+
+    def fake_truncate(content, char_limit):
+        if char_limit is None:
+            return content[:50], True
+        return original_truncate(content, char_limit)
+
+    with patch("agile_agent_factory.agents.reviewer_agent.generate_review", side_effect=fake_generate), \
+         patch("agile_agent_factory.agents.reviewer_agent._truncate_for_review", side_effect=fake_truncate), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"):
+
+        result = reviewer_agent.review_patch(
+            jira, ["F1-1"], write_scope=["tests/test_repo.py"]
+        )
+
+    assert call_count["n"] == 2, "Expected two generate_review calls (initial + scope-only retry)"
+    assert result.success is True, "Scope-only retry approved — result should be success"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: prompt honesty
+# ---------------------------------------------------------------------------
+
+def test_prompt_does_not_claim_complete_and_includes_truncation_instruction():
+    """The prompt must not lie about completeness and must instruct against truncation-based rejection."""
+    from agile_agent_factory.tools.llm_adapters.reviewer import build_review_prompt
+    files_block = "### tests/test_repo.py\n```python\ndef test_pass(): pass\n```\n[TRUNCATED FOR REVIEW BUDGET]"
+    prompt = build_review_prompt(dod_section="pass all tests", files_block=files_block)
+
+    assert "COMPLETE contents" not in prompt, (
+        "Prompt must not claim completeness — some files may be truncated"
+    )
+    assert "TRUNCATED" in prompt or "truncat" in prompt.lower(), (
+        "Prompt must acknowledge that truncation can occur"
+    )
+    assert "do NOT reject" in prompt or "do not reject" in prompt.lower(), (
+        "Prompt must instruct reviewer not to reject at truncation boundaries"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 5: line-boundary truncation regression
+# ---------------------------------------------------------------------------
+
+def test_truncate_for_review_never_ends_mid_line():
+    """Truncated output must end at a line boundary, never mid-token."""
+    import re
+    from agile_agent_factory.agents.reviewer_agent import _truncate_for_review
+    line = "recipe = Recipe(name='test', steps=['boil', 'serve'])\n"
+    content = line * 200  # 200 * ~52 chars = ~10 400 chars; limit of 8000 falls mid-line
+    snippet, truncated = _truncate_for_review(content, 8000)
+    assert truncated is True
+    assert snippet.endswith("\n") or "\n" not in snippet, (
+        f"Snippet must end at a line boundary, got tail: {repr(snippet[-40:])}"
+    )
+    assert not re.search(r"[a-zA-Z0-9_]$", snippet), (
+        f"Snippet must not end mid-identifier, got tail: {repr(snippet[-20:])}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Original test (retained below)
+# ---------------------------------------------------------------------------
+
 def test_review_prompt_explains_truncation_behavior(tmp_path, monkeypatch):
     """The reviewer prompt must not describe truncated excerpts as complete files."""
     import agile_agent_factory.agents.reviewer_agent as ra
