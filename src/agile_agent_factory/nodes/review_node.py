@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import re
+from pathlib import Path
 
 from agile_agent_factory.config import MAX_REVIEW_RETRIES
 from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc, make_adf_heading
@@ -80,6 +82,87 @@ def _filter_rejection(
     return True, reason
 
 
+# --------------------------------------------------------------------------- #
+# Milestone 3 — Deterministic pre-review gate                                 #
+# --------------------------------------------------------------------------- #
+
+def _pre_review_gate(
+    story: dict,
+    write_scope: list[str],
+    product_root: Path,
+) -> tuple[bool, str]:
+    """Deterministic structural checks run before the LLM reviewer.
+
+    Returns (passed, reason):
+      passed=True  → all checks green, proceed to LLM review
+      passed=False → reason describes what failed; treat as rework trigger
+    """
+    from agile_agent_factory.tools.pytest_runner import run_pytest
+
+    tc = story.get("test_contract", {}) or {}
+
+    # --- Check 1: Scope completeness ---
+    if write_scope:
+        missing = [p for p in write_scope if not (product_root / p).exists()]
+        if missing:
+            return False, f"Missing required files: {missing}"
+
+    # --- Check 2: Test function presence ---
+    expected_tests: list[str] = tc.get("expected_tests", []) or []
+    if expected_tests:
+        test_file_rel = tc.get("test_file", "")
+        test_file_path = product_root / test_file_rel if test_file_rel else None
+        if test_file_path and test_file_path.exists():
+            try:
+                source = test_file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source)
+                defined_names = {
+                    node.name
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+                }
+                missing_fns = [fn for fn in expected_tests if fn not in defined_names]
+                if missing_fns:
+                    return False, f"Missing expected test functions: {missing_fns}"
+            except Exception:
+                # If we can't parse the test file, skip this check (don't hard-fail)
+                pass
+
+    # --- Check 3: Import contract validity (syntax check on source files) ---
+    target_imports: list[str] = tc.get("target_imports", []) or []
+    if target_imports:
+        for imp in target_imports:
+            m = re.match(r"from (app(?:\.\w+)+) import", imp)
+            if not m:
+                continue
+            src_rel = m.group(1).replace(".", "/") + ".py"
+            src_path = product_root / src_rel
+            if not src_path.exists():
+                continue
+            try:
+                source = src_path.read_text(encoding="utf-8")
+                ast.parse(source)
+            except SyntaxError as e:
+                return False, f"Syntax error in {src_rel}: {e}"
+            except Exception:
+                pass
+
+    # --- Check 4: Targeted pytest pass ---
+    test_file_rel = tc.get("test_file", "")
+    if test_file_rel:
+        test_file_path = product_root / test_file_rel
+        if test_file_path.exists():
+            exit_code, output = run_pytest([], test_targets=[str(test_file_path)])
+            if exit_code != 0:
+                first_error = next(
+                    (line for line in output.splitlines() if line.strip()),
+                    "pytest failed"
+                )
+                return False, f"Targeted tests failing: {first_error}"
+
+    return True, ""
+
+
 def review_node(state: PipelineState) -> dict:
     """Reviewer agent: LLM audit of generated code against the DoD for ONE story."""
     from langgraph.types import interrupt
@@ -107,6 +190,55 @@ def review_node(state: PipelineState) -> dict:
                 path_str = m.group(1).replace(".", "/") + ".py"
                 if path_str not in write_scope:
                     write_scope.append(path_str)
+
+    # Milestone 3: deterministic pre-gate — catches structural failures before LLM review
+    from agile_agent_factory.config import PRODUCT_ROOT as _PRODUCT_ROOT
+    gate_passed, gate_reason = _pre_review_gate(story, write_scope, _PRODUCT_ROOT)
+    if not gate_passed:
+        log(f"Review: pre-gate failed for {sk}: {gate_reason}")
+        review_retries += 1
+        if review_retries >= MAX_REVIEW_RETRIES:
+            log(f"Max review retries ({MAX_REVIEW_RETRIES}) exhausted for {sk} (pre-gate). Triggering HITL.")
+            summary = (
+                f"Code review HITL: pre-gate failed after {review_retries} attempts.\n\n"
+                f"Gate failure reason:\n\n{gate_reason}"
+            )
+            jira.add_comment_adf(sk, make_adf_doc(summary))
+            jira.set_flag(sk)
+            interrupt({"type": "intervention", "blocking_key": sk})
+            try:
+                jira.clear_flag(sk)
+            except Exception:
+                pass
+            return {
+                "review_approved": False,
+                "review_retries": 0,
+                "stories": {sk: {"review_retries": 0, "review_status": "pending_review"}},
+            }
+        cycle = review_retries
+        log(f"Review pre-gate failed for {sk} (retry {cycle}/{MAX_REVIEW_RETRIES}). Keeping in code_review for rework.")
+        kickback_doc = {
+            "version": 1,
+            "type": "doc",
+            "content": [
+                make_adf_heading(
+                    f"Code review pre-gate failed — keeping in code_review for rework (cycle {cycle} of {MAX_REVIEW_RETRIES})"
+                ),
+                {"type": "paragraph", "content": [{"type": "text", "text": f"Reason: {gate_reason}"}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "The downstream agent will attempt to fix the structural issues above."}]},
+            ],
+        }
+        jira.add_comment_adf(sk, kickback_doc)
+        return {
+            "review_approved": False,
+            "review_retries": cycle,
+            "stories": {sk: {
+                "column": "code_review",
+                "review_status": "rework_needed",
+                "review_retries": cycle,
+                "review_rejection_reason": gate_reason,
+            }},
+        }
 
     try:
         result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
