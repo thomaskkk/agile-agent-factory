@@ -74,8 +74,9 @@ agile-agent-factory/        ← this repo (the factory)
 │       └── nodes/          ← LangGraph node wrappers
 │           ├── pipeline.py         ← lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize)
 │           ├── dev_node.py         ← development node (LLM/aider code generation)
-│           ├── test_node.py        ← testing node (pytest retry loop)
-│           ├── review_node.py      ← code-review node (DoD audit + rework routing)
+│           ├── test_node.py        ← testing node (pytest retry loop, mechanical recovery, two-stage targeted+full)
+│           ├── review_node.py      ← code-review node (DoD audit, 3-layer verdict filter, rework routing)
+│           ├── failure_recovery.py ← classify_failure, files_from_traceback, _scaffold_missing_module
 │           ├── dispatcher.py       ← right-to-left kanban dispatcher with WIP limits and Send() fan-out
 │           └── helpers.py          ← shared node helpers (incl. raise_quota_interrupt)
 └── tests/                  ← factory unit tests (not product tests)
@@ -136,6 +137,8 @@ All settings live in `.env`. Key variables:
 | `MAX_RETRIES_DEV` | `2` | pytest failure retries before HITL pause |
 | `MAX_REVIEW_RETRIES` | `2` | code-review rejection retries per story before HITL pause |
 | `MAX_CORRECTION_FAILURES` | `2` | correction-loop zero-file failures before HITL (does not consume `MAX_RETRIES_DEV` budget) |
+| `MAX_STRATEGY_RETRIES` | `3` | separate budget for mechanical recovery (dep re-resolve, stub scaffold, truncation retry); never consumes `MAX_RETRIES_DEV` |
+| `ASSUMPTION_RISK_THRESHOLD` | `0.7` | PO risk gate: aggregated assumption confidence above this escalates to HITL; below → proceed and post ledger to Jira |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Anthropic model ID |
 | `OPENAI_MODEL` | `gpt-5.4` | OpenAI model ID (fallback) |
 | `OPENAI_API_KEY` | — | Required only if Anthropic calls fail |
@@ -185,4 +188,4 @@ cd agile-agent-factory
 uv run pytest tests/ -v
 ```
 
-180 tests covering `config` (3), `workflow` (2), `jira_facade` (5), `llm_adapters` (10), `agent_contract` (2), `path_utils` (10), `llm_client` (23), `jira_client` (17), `pytest_runner` (5), `po_agent` (4), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (9), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (12), `dispatcher` (18), and `graph` (28).
+255 tests covering `config` (7), `workflow` (2), `jira_facade` (5), `llm_adapters` (10), `agent_contract` (2), `path_utils` (10), `llm_client` (27), `jira_client` (17), `pytest_runner` (8), `po_agent` (7), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (9), `failure_recovery` (16), `review_node` (14), `test_node` (7), `dev_node` (7), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (19), `dispatcher` (18), and `graph` (28).

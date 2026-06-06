@@ -32,6 +32,8 @@ uv run pytest tests/ -v       # run factory unit tests (not product tests)
 - `LLM_QUOTA_MAX_RETRIES=3` / `LLM_RETRY_BACKOFF_SECONDS=30` — exponential backoff before pausing the pipeline on quota errors
 - `PO_MODEL` / `QA_MODEL` / `UX_MODEL` / `TL_MODEL` / `DEV_MODEL` / `TEST_MODEL` / `REVIEWER_MODEL` / `README_MODEL` — per-agent model override. Provider auto-detected from name prefix (`claude-*` → Anthropic, `gpt-*`/`o*-*` → OpenAI). Leave blank to use the global `ANTHROPIC_MODEL` / `OPENAI_MODEL`.
 - `WIP_LIMIT_REFINEMENT=3` / `WIP_LIMIT_TECH_DESIGN=2` / `WIP_LIMIT_DEVELOPMENT=2` / `WIP_LIMIT_TESTING=2` / `WIP_LIMIT_CODE_REVIEW=1` — kanban WIP limits per column
+- `MAX_STRATEGY_RETRIES=3` — separate budget for mechanical/strategy retries (dep re-resolution, stub scaffolding, truncation retries); does **not** consume `MAX_RETRIES_DEV`
+- `ASSUMPTION_RISK_THRESHOLD=0.7` — PO risk gate: aggregated assumption risk above this value triggers HITL; below → proceed with ledger posted to Jira
 
 ## Architecture
 
@@ -40,7 +42,7 @@ LangGraph `StateGraph` with a kanban dispatcher for story-level parallelism:
 - **State**: `PipelineState` (TypedDict) in `src/agile_agent_factory/state.py` — persisted by `SqliteSaver` in `pipeline_checkpoint.db`. Per-story state lives in `PipelineState.stories[story_key]` (a `StoryState` dict merged by `merge_stories` reducer).
 - **Graph**: `src/agile_agent_factory/graph.py` — `init → po → dispatcher → [qa | ux | refinement_gate | tl | dev | test | review] → dispatcher (loop) → finalize → END`
 - **Dispatcher**: `src/agile_agent_factory/nodes/dispatcher.py` — deterministic routing. Scans columns right-to-left (`code_review → testing → development → tech_design → refinement`), respects WIP limits, emits `Send()` commands. TL is dispatched as a batch (one `Send` for all `tech_design` stories); all other agents are per-story.
-- **Nodes**: each wraps an existing agent, returns a partial dict (LangGraph merges via reducers), and never calls `update_state()`. `nodes/pipeline.py` holds only the lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize); `nodes/dev_node.py`, `nodes/test_node.py`, and `nodes/review_node.py` hold dev/test/review respectively; shared helpers (incl. `raise_quota_interrupt`) live in `nodes/helpers.py`. `nodes/__init__.py` re-exports every node as the stable surface `graph.py` imports.
+- **Nodes**: each wraps an existing agent, returns a partial dict (LangGraph merges via reducers), and never calls `update_state()`. `nodes/pipeline.py` holds only the lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize); `nodes/dev_node.py`, `nodes/test_node.py`, and `nodes/review_node.py` hold dev/test/review respectively; shared helpers (incl. `raise_quota_interrupt`) live in `nodes/helpers.py`. `nodes/__init__.py` re-exports every node as the stable surface `graph.py` imports. `nodes/failure_recovery.py` provides `classify_failure`, `files_from_traceback`, and `_scaffold_missing_module` — mechanical recovery helpers used by `test_node`.
 - **Agent abstraction layers** (added by the architectural-layering refactor):
   - **`tools/workflow.py` — `WorkflowState` enum**: the single source of truth for every Jira transition target. Agents/nodes call `jira.transition_to(key, WorkflowState.X)` (or `_safe_transition` / `JiraFacade.move_all`), never a transition string literal. Consolidates the old QA `"To Tech Refinement"` / TL `"Tech Refinement"` drift onto `TECH_REFINEMENT`.
   - **`tools/jira_facade.py` — `JiraFacade`**: thin domain adapter over `JiraClient` (`advance`, `move_all`, `flag_for_human`, `post_section`). Used by sre/po/reviewer; qa/ux still write descriptions directly via `update_issue_description` (no facade match).
@@ -97,25 +99,29 @@ Never bypass this function when writing files from LLM output.
 
 ## Testing
 
-Factory tests live in `agile-agent-factory/tests/`. They cover (180 tests total):
-- `config` — 3 tests (WIP_LIMITS env override + defaults, reviewer/readme budget constants)
+Factory tests live in `agile-agent-factory/tests/`. They cover (255 tests total):
+- `config` — 7 tests (WIP_LIMITS env override + defaults, reviewer/readme budget constants, MAX_STRATEGY_RETRIES, ASSUMPTION_RISK_THRESHOLD)
 - `workflow` — 2 tests (WorkflowState enum values, uniqueness)
 - `jira_facade` — 5 tests (advance/move_all delegation, error swallowing, flag_for_human, post_section)
 - `llm_adapters` — 10 tests (per-agent prompt builders include their inputs)
 - `agent_contract` — 2 tests (AgentResult defaults, payload/errors)
 - `path_utils` — 10 tests (path normalization and traversal rejection)
-- `llm_client` — 23 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, network-error handling)
+- `llm_client` — 27 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, LLMTransientError separate from quota, comma-chain model fallback)
 - `jira_client` — 17 tests (mocked HTTP via `responses` library, subtask type discovery, `append_adf_doc`, `update_issue_description`, DRY_RUN-early skip)
-- `pytest_runner` — 5 tests (PYTHONPATH injection, exit codes, `--with` extra-package flags)
-- `po_agent` — 4 tests (idempotency guard, issue creation, hitl_feedback injection)
+- `pytest_runner` — 8 tests (PYTHONPATH injection, exit codes, `--with` extra-package flags, `test_targets` overrides full-suite default)
+- `po_agent` — 7 tests (idempotency guard, issue creation, hitl_feedback injection, non-critical assumption ledger, must-escalate hitl_required, risk score computation)
 - `tl_agent` — 8 tests (architecture caching on resume, subtask idempotency, fresh LLM call + persistence, write-scope guard)
 - `qa_agent` — 4 tests
 - `ux_agent` — 7 tests (validated spec, Jira description append, quota propagation, unknown ui_type/technology rejection)
 - `reviewer_agent` — 9 tests
+- `failure_recovery` — 16 tests (files_from_traceback ordering/dedup/stdlib-filtering, classify_failure per class, _scaffold_missing_module creates stubs/skips non-app)
+- `review_node` — 14 tests (layer-1 out-of-scope filter, layer-2 vagueness filter, _filter_rejection combined, rework prompt includes write_scope)
+- `test_node` — 7 tests (missing_dependency/module mechanical recovery, targeted+full two-stage routing, quarantine of cross-story regression, truncated correction uses strategy budget, reasoning exhaustion fires HITL)
+- `dev_node` — 7 tests (namespace collision detection, _correct_code puts traceback file first, returns status tuple, empty-on-bad-json)
 - `dependencies` — 6 tests (import scan, package aliases, unparseable file skip, 3-signal union, Flask recovery)
 - `aider_client` — 5 tests (is_available guards, subprocess args, failure exit code)
 - `readme_agent` — 2 tests
-- `ready_contract` — 12 tests (contract validation, readiness repair, test_contract extraction)
+- `ready_contract` — 19 tests (contract validation, readiness repair, test_contract extraction, per-class routing: summary→QA, user-intent→QA, UI-flow→UX, unsafe-interfaces→HITL, open_questions→QA)
 - `dispatcher` — 18 tests (RTL priority, WIP limits, refinement sub-phases, gate routing, active_story_key, code_review rework routing)
 - `graph` — 28 tests (graph compilation, node behavior, routing, state reducer, HITL scenarios, review HITL exhaustion, dev rework path)
 
@@ -138,10 +144,14 @@ PYTHONPATH for product tests is injected by `src/agile_agent_factory/tools/pytes
 - Architecture is cached in `StoryState.architecture` after the TL run — `design_architecture` reuses it on resume (no extra LLM call); subtasks already in `state["subtasks"]` are skipped
 - `dependencies.resolve_dependencies(state, product_root)` unions three signals: TL-declared deps, UX-technology package, and a static AST scan of generated code — pass its result to `run_pytest()` as `extra_packages`
 - `MAX_CORRECTION_FAILURES = 2` caps how many times the correction LLM may produce zero usable files before escalating to HITL (these do not consume the `MAX_RETRIES_DEV` budget)
+- `MAX_STRATEGY_RETRIES = 3` caps a separate **mechanical attempt** counter (`strategy_retries` in `test_node`). Mechanical recovery (dep re-resolve, stub scaffolding, truncation retry) consumes `strategy_retries`, not `retries` — only genuine unresolved LLM-reasoning failures advance toward HITL
+- `regression_blockers` in `StoryState` holds cross-story test failures quarantined when targeted tests pass but the full suite regression lies outside the story's `write_scope`; the story advances flagged rather than silently. `finalize` surfaces a count of unresolved blockers.
+- `assumption_ledger` and `unresolved_risk_score` in `StoryState` are set by `po_node`. `unresolved_risk_score > ASSUMPTION_RISK_THRESHOLD` triggers the refinement interrupt; below threshold the PO proceeds under recorded assumptions (posted to Jira as a notification comment).
+- `_correct_code` returns `(status, list[str])` — `"ok"` (files written), `"truncated"` (strategy retry), or `"empty"` (correction failure). `test_node` routes each status to the appropriate budget counter.
 - `active_story_key` in `PipelineState` is set by the dispatcher in each `Send()` payload — per-story nodes call `_active_story(state)` to get their assigned story; TL ignores it and reads all `tech_design` stories directly
 - `refinement_gate_node` builds a `ready_contract` dict (via `agents/ready_contract.py`) and validates it before advancing a story to `tech_design`; validation errors set `ready_validation_errors` and keep the story in `refinement`
 - TL task files (`blueprint/tasks/<story_key>.md`) include a **write-scope section** derived from the story's `test_contract` — it lists the exact files the dev agent is allowed to create/overwrite; the reviewer enforces the same scope via `write_scope` passed to `review_patch()`
-- `StoryState` new fields: `test_contract` (dict — expected test names and target interfaces, set by QA), `ready_contract` (dict — full DoR snapshot), `ready_validation_errors` (list[str]), `ready_validated` (bool)
+- `StoryState` new fields: `test_contract` (dict — expected test names and target interfaces, set by QA), `ready_contract` (dict — full DoR snapshot), `ready_validation_errors` (list[str]), `ready_validated` (bool), `regression_blockers` (list — cross-story test ids quarantined by `test_node`), `assumption_ledger` (list — PO assumptions made when proceeding without HITL), `unresolved_risk_score` (float 0–1)
 
 ## Local-only files
 
