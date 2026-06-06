@@ -27,7 +27,9 @@ def classify_failure(exit_code: int, output: str) -> str:
         "other"               — unclassified; falls through to LLM correction
     """
     if exit_code in (4, 5):
-        return "missing_module"
+        if re.search(r"No module named '", output):
+            return "missing_module"
+        return "other"
 
     has_import_err = "ModuleNotFoundError" in output or "ImportError" in output
     if has_import_err:

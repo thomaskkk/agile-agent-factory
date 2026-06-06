@@ -53,12 +53,28 @@ def test_files_from_traceback_empty_output():
 # classify_failure
 # ---------------------------------------------------------------------------
 
-def test_classify_failure_exit_4_is_missing_module():
-    assert _mod().classify_failure(4, "collected 0 items / 1 error") == "missing_module"
+def test_classify_failure_exit_4_with_no_module_named_is_missing_module():
+    output = "ModuleNotFoundError: No module named 'app.database'"
+    assert _mod().classify_failure(4, output) == "missing_module"
 
 
-def test_classify_failure_exit_5_is_missing_module():
-    assert _mod().classify_failure(5, "no tests ran") == "missing_module"
+def test_classify_failure_exit_5_with_no_module_named_is_missing_module():
+    output = "ModuleNotFoundError: No module named 'app.utils'"
+    assert _mod().classify_failure(5, output) == "missing_module"
+
+
+def test_classify_failure_exit_4_import_name_error_is_other():
+    output = "ImportError: cannot import name 'clear_db' from 'app.database'"
+    assert _mod().classify_failure(4, output) == "other"
+
+
+def test_classify_failure_exit_4_syntax_error_is_other():
+    output = "SyntaxError: invalid syntax\ncollected 0 items / 1 error"
+    assert _mod().classify_failure(4, output) == "other"
+
+
+def test_classify_failure_exit_5_no_output_is_other():
+    assert _mod().classify_failure(5, "no tests ran") == "other"
 
 
 def test_classify_failure_missing_dependency():
