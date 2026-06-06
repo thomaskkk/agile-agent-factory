@@ -192,7 +192,7 @@ def test_truncated_correction_uses_strategy_budget_not_retry(monkeypatch):
 
     correction_calls = [0]
 
-    def fake_correct(blueprint, traceback, model=None):
+    def fake_correct(blueprint, traceback, model=None, write_scope=None):
         correction_calls[0] += 1
         if correction_calls[0] == 1:
             return ("truncated", [])  # first call: truncated
@@ -341,7 +341,7 @@ def test_syntax_error_uses_targeted_llm_hint_not_retries(monkeypatch):
             return 1, "SyntaxError: invalid syntax\napp/models.py line 5"
         return 0, "1 passed"
 
-    def fake_correct(blueprint, traceback, model=None):
+    def fake_correct(blueprint, traceback, model=None, write_scope=None):
         correct_calls.append(traceback)
         return ("ok", ["app/models.py"])
 
@@ -374,7 +374,7 @@ def test_bad_import_signature_uses_targeted_llm_hint(monkeypatch):
             return 1, "ImportError: cannot import name 'create_app' from 'app.factory'"
         return 0, "1 passed"
 
-    def fake_correct(blueprint, traceback, model=None):
+    def fake_correct(blueprint, traceback, model=None, write_scope=None):
         correct_calls.append(traceback)
         return ("ok", ["app/factory.py"])
 
@@ -405,7 +405,7 @@ def test_collection_error_generic_uses_targeted_llm_hint(monkeypatch):
             return 4, "collected 0 items / 1 error\nsome unexpected issue"
         return 0, "1 passed"
 
-    def fake_correct(blueprint, traceback, model=None):
+    def fake_correct(blueprint, traceback, model=None, write_scope=None):
         correct_calls.append(traceback)
         return ("ok", ["app/something.py"])
 

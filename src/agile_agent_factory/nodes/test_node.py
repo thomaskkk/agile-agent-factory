@@ -187,7 +187,7 @@ def test_node(state: PipelineState) -> dict:
                 hint = _failure_hint(failure_class)
                 log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
                 correction_status, corrected = _correct_code(
-                    blueprint, hint + output, model=TEST_MODEL or None
+                    blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None
                 )
                 strategy_retries += 1
 
@@ -225,7 +225,7 @@ def test_node(state: PipelineState) -> dict:
             continue
 
         log("Requesting LLM-driven correction.")
-        correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None)
+        correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None)
 
         # Truncation: strategy retry budget (not the LLM reasoning budget)
         if correction_status == "truncated":
