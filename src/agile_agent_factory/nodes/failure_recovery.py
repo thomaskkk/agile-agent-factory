@@ -75,12 +75,13 @@ def classify_failure(exit_code: int, output: str) -> str:
     if "ERRORS" in output and "not found in" in output:
         return "missing_test_function"
 
+    # --- Assertion failures (check BEFORE namespace_collision to avoid false positives) ---
+    if "AssertionError" in output or re.search(r"\bFAILED\b", output):
+        return "assertion"
+
     # --- Namespace collision: app module imported twice ---
     if _detect_namespace_collision(output):
         return "namespace_collision"
-
-    if "AssertionError" in output or re.search(r"\bFAILED\b", output):
-        return "assertion"
 
     return "other"
 
@@ -187,6 +188,10 @@ def _scaffold_fixture(output: str) -> list[str]:
     if not stubs:
         return []
 
+    # Ensure trailing newline before appending new content
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+
     header = "import pytest\n" if "import pytest" not in existing else ""
     conftest_path.write_text(existing + header + "".join(stubs))
     return [conftest_rel]
@@ -238,6 +243,9 @@ def _scaffold_missing_test_function(output: str, test_file: str | None) -> list[
             log(f"Scaffolded test stub: {fn} in {rel_path}")
 
         if stubs:
+            # Ensure trailing newline before appending new content
+            if existing and not existing.endswith("\n"):
+                existing += "\n"
             target.write_text(existing + "".join(stubs))
             written.append(rel_path)
 
