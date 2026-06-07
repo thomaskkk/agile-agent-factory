@@ -158,11 +158,9 @@ def _pre_review_gate(
                 exit_code, output = 0, ""  # can't verify; proceed to LLM reviewer
             # Exit code 5 means "no tests collected" — treat as pass
             if exit_code != 0 and exit_code != 5:
-                first_error = next(
-                    (line for line in output.splitlines() if line.strip()),
-                    "pytest failed"
-                )
-                return False, f"Targeted tests failing: {first_error}"
+                from agile_agent_factory.nodes.dev_node import _extract_error_summary
+                error_detail = _extract_error_summary(output)
+                return False, f"Targeted tests failing: {error_detail}"
 
     return True, ""
 
