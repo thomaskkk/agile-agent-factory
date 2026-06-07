@@ -89,10 +89,12 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
     if assumptions and epic_keys:
         _post_assumption_ledger(jira, epic_keys[0], assumptions)
 
-    # Compute unresolved risk score: average confidence mapped to risk (low→high)
-    _RISK_MAP = {"high": 0.1, "medium": 0.5, "low": 0.9}
+    # Compute unresolved risk score: impact-weighted mean of (1 - confidence).
+    # High-impact + low-confidence assumptions drive the score up; low-impact ambiguity
+    # does not inflate the score needlessly.
     risk_score = (
-        sum(_RISK_MAP.get(a.get("confidence", "medium"), 0.5) for a in assumptions) / len(assumptions)
+        sum(a.get("impact", 0.5) * (1 - a.get("confidence", 0.5)) for a in assumptions)
+        / max(len(assumptions), 1)
         if assumptions else 0.0
     )
 

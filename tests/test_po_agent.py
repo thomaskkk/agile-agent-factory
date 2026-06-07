@@ -160,7 +160,7 @@ def test_non_critical_ambiguity_records_assumption_not_hitl(tmp_path, monkeypatc
         "hitl_required": False,
         "ambiguity_description": "",
         "assumptions": [
-            {"description": "App targets Linux only (unspecified in requirements)", "confidence": "high", "impact": "low"}
+            {"description": "App targets Linux only (unspecified in requirements)", "confidence": 0.9, "impact": 0.2}
         ],
         "has_ui": False,
         "epics": [
@@ -180,7 +180,7 @@ def test_non_critical_ambiguity_records_assumption_not_hitl(tmp_path, monkeypatc
 
     assert result.payload.get("hitl_required") is not True
     assert len(result.payload.get("assumption_ledger", [])) == 1
-    assert result.payload["assumption_ledger"][0]["confidence"] == "high"
+    assert result.payload["assumption_ledger"][0]["confidence"] == 0.9
 
 
 def test_must_escalate_ambiguity_sets_hitl_required(tmp_path, monkeypatch, mock_jira):
@@ -222,13 +222,13 @@ def test_risk_score_computed_from_assumptions(tmp_path, monkeypatch, mock_jira):
     monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
     monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "bi.md")
 
-    # low-confidence assumption → high risk
+    # low-confidence, high-impact assumption → high risk score
     llm_response = {
         "has_ambiguity": False,
         "hitl_required": False,
         "ambiguity_description": "",
         "assumptions": [
-            {"description": "guessing the auth strategy", "confidence": "low", "impact": "high"}
+            {"description": "guessing the auth strategy", "confidence": 0.1, "impact": 0.9}
         ],
         "has_ui": False,
         "epics": [
@@ -247,4 +247,125 @@ def test_risk_score_computed_from_assumptions(tmp_path, monkeypatch, mock_jira):
                                               "blocking_issue_key": None, "subtasks": {}, "review_retries": 0})
 
     score = result.payload.get("unresolved_risk_score", 0.0)
-    assert score > 0.5, f"Low-confidence assumption should produce high risk score, got {score}"
+    # impact=0.9, confidence=0.1 → 0.9 * 0.9 = 0.81
+    assert score > 0.5, f"Low-confidence high-impact assumption should produce high risk score, got {score}"
+
+
+# ---------------------------------------------------------------------------
+# Impact-weighted formula discriminating tests (Milestone 6)
+# ---------------------------------------------------------------------------
+
+def _base_state():
+    return {
+        "status": "READY",
+        "current_phase": None,
+        "story_keys": [],
+        "epic_keys": [],
+        "blocking_issue_key": None,
+        "subtasks": {},
+        "review_retries": 0,
+    }
+
+
+def _single_story_response(assumptions: list) -> dict:
+    return {
+        "has_ambiguity": False,
+        "hitl_required": False,
+        "ambiguity_description": "",
+        "assumptions": assumptions,
+        "has_ui": False,
+        "epics": [
+            {
+                "title": "Core",
+                "description": "Main epic",
+                "stories": [
+                    {"title": "Task", "description": "As a user...", "definition_of_done": ["done"]}
+                ],
+            }
+        ],
+    }
+
+
+def test_high_impact_low_confidence_triggers_hitl(tmp_path, monkeypatch, mock_jira):
+    """impact=0.9, confidence=0.1 → score = 0.9 * 0.9 = 0.81 > threshold (0.7) → HITL."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+    from agile_agent_factory.config import ASSUMPTION_RISK_THRESHOLD
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build a payment system.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+    monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "bi.md")
+
+    llm_response = _single_story_response([
+        {"description": "Payment provider unknown", "confidence": 0.1, "impact": 0.9}
+    ])
+
+    jira = mock_jira
+    jira.create_issue.side_effect = [{"key": "P-1"}, {"key": "P-2"}]
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, _base_state())
+
+    score = result.payload.get("unresolved_risk_score", 0.0)
+    # 0.9 * (1 - 0.1) = 0.81
+    assert abs(score - 0.81) < 1e-9, f"Expected 0.81, got {score}"
+    assert score > ASSUMPTION_RISK_THRESHOLD, (
+        f"Score {score:.3f} should exceed threshold {ASSUMPTION_RISK_THRESHOLD} to trigger HITL"
+    )
+
+
+def test_low_impact_low_confidence_does_not_trigger_hitl(tmp_path, monkeypatch, mock_jira):
+    """impact=0.1, confidence=0.1 → score = 0.1 * 0.9 = 0.09 < threshold (0.7) → no HITL."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+    from agile_agent_factory.config import ASSUMPTION_RISK_THRESHOLD
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build a cli tool.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+    monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "bi.md")
+
+    llm_response = _single_story_response([
+        {"description": "Minor colour scheme unspecified", "confidence": 0.1, "impact": 0.1}
+    ])
+
+    jira = mock_jira
+    jira.create_issue.side_effect = [{"key": "C-1"}, {"key": "C-2"}]
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, _base_state())
+
+    score = result.payload.get("unresolved_risk_score", 0.0)
+    # 0.1 * (1 - 0.1) = 0.09
+    assert abs(score - 0.09) < 1e-9, f"Expected 0.09, got {score}"
+    assert score < ASSUMPTION_RISK_THRESHOLD, (
+        f"Score {score:.3f} should be below threshold {ASSUMPTION_RISK_THRESHOLD} — low impact should not trigger HITL"
+    )
+
+
+def test_mixed_assumptions_weighted_correctly(tmp_path, monkeypatch, mock_jira):
+    """Two assumptions: (impact=0.9, confidence=0.1) and (impact=0.1, confidence=0.9)
+    score = (0.9*0.9 + 0.1*0.1) / 2 = (0.81 + 0.01) / 2 = 0.41."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build a mixed app.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+    monkeypatch.setattr("agile_agent_factory.agents.po_agent.BP_BUSINESS_INTENT", tmp_path / "bi.md")
+
+    llm_response = _single_story_response([
+        {"description": "Critical unknown", "confidence": 0.1, "impact": 0.9},
+        {"description": "Minor cosmetic detail", "confidence": 0.9, "impact": 0.1},
+    ])
+
+    jira = mock_jira
+    jira.create_issue.side_effect = [{"key": "M-1"}, {"key": "M-2"}]
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, _base_state())
+
+    score = result.payload.get("unresolved_risk_score", 0.0)
+    # (0.9 * 0.9 + 0.1 * 0.1) / 2 = (0.81 + 0.01) / 2 = 0.41
+    assert abs(score - 0.41) < 1e-9, f"Expected 0.41, got {score}"
