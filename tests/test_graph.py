@@ -881,3 +881,127 @@ def test_raise_quota_interrupt_default_state_none():
 
     assert "quota_retry_after" in patch_dict
     assert patch_dict["quota_autonomous_retries"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Milestone 7 — hitl_type written before HITL interrupts
+# ---------------------------------------------------------------------------
+
+def test_test_node_intervention_sets_hitl_type():
+    """When test_node fires the intervention interrupt (retries exhausted), the returned
+    state patch must include hitl_type == 'intervention' in the story sub-dict."""
+    import importlib
+    tn_mod = importlib.import_module("agile_agent_factory.nodes.test_node")
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {"F1-1": {"column": "testing", "test_contract": {}}},
+        "epic_keys": [],
+        "gherkin_criteria": {},
+    }
+
+    interrupt_calls = []
+
+    def fake_interrupt(payload):
+        interrupt_calls.append(payload)
+        return None  # simulate resume immediately
+
+    jira = MagicMock()
+    orig_run = tn_mod.run_pytest
+    orig_load = tn_mod._load_dev_context
+    orig_resolve = tn_mod.resolve_dependencies
+    orig_jira = tn_mod.JiraClient
+    orig_correct = tn_mod._correct_code
+    try:
+        tn_mod.run_pytest = lambda *a, **kw: (1, "FAILED tests/test_x.py::test_y\nAssertionError")
+        tn_mod._load_dev_context = lambda sk: "bp"
+        tn_mod.resolve_dependencies = lambda *a, **kw: []
+        tn_mod.JiraClient = lambda: jira
+        tn_mod._correct_code = lambda *a, **kw: ("ok", ["app/x.py"])
+        with patch("langgraph.types.interrupt", side_effect=fake_interrupt):
+            result = tn_mod.test_node(state)
+    finally:
+        tn_mod.run_pytest = orig_run
+        tn_mod._load_dev_context = orig_load
+        tn_mod.resolve_dependencies = orig_resolve
+        tn_mod.JiraClient = orig_jira
+        tn_mod._correct_code = orig_correct
+
+    assert len(interrupt_calls) >= 1
+    assert interrupt_calls[0]["type"] == "intervention"
+    assert result["stories"]["F1-1"]["hitl_type"] == "intervention"
+
+
+def test_review_node_exhaustion_sets_hitl_type():
+    """When review_node exhausts review retries and fires the intervention interrupt,
+    the returned state patch must include hitl_type == 'review_exhaustion'."""
+    from agile_agent_factory.config import MAX_REVIEW_RETRIES
+    from agile_agent_factory.nodes import review_node
+    from agile_agent_factory.agents import reviewer_agent
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {"F1-1": {"story_key": "F1-1", "column": "code_review", "review_retries": MAX_REVIEW_RETRIES}},
+        "epic_keys": [],
+        "review_retries": MAX_REVIEW_RETRIES,
+    }
+
+    jira = MagicMock()
+    original = reviewer_agent.review_patch
+    reviewer_agent.review_patch = MagicMock(
+        return_value=AgentResult(success=False, payload={"approved": False, "reason": "Still failing tests"})
+    )
+    try:
+        with patch("agile_agent_factory.nodes.review_node.JiraClient", return_value=jira), \
+             patch("langgraph.types.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = None
+            result = review_node(state)
+    finally:
+        reviewer_agent.review_patch = original
+
+    mock_interrupt.assert_called_once()
+    assert result["stories"]["F1-1"]["hitl_type"] == "review_exhaustion"
+
+
+def test_raise_quota_interrupt_sets_hitl_type_for_known_story_key():
+    """When quota budget exhausted and blocking_key is a known story key,
+    the returned patch must include stories[key]['hitl_type'] == 'quota'."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+    state = {
+        "quota_autonomous_retries": 3,
+        "stories": {"F1-1": {"column": "development"}},
+    }
+
+    with patch("agile_agent_factory.nodes.helpers.interrupt") as mock_interrupt:
+        mock_interrupt.return_value = None
+        patch_dict = raise_quota_interrupt(jira, "F1-1", exc, state=state, max_autonomous_retries=3)
+
+    mock_interrupt.assert_called_once()
+    assert "stories" in patch_dict
+    assert patch_dict["stories"]["F1-1"]["hitl_type"] == "quota"
+
+
+def test_raise_quota_interrupt_no_hitl_type_for_non_story_key():
+    """When blocking_key is not a known story key (e.g. epic or None),
+    no 'stories' patch is emitted for hitl_type."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+    # State has F1-1 as a story, but we pass an epic key F1-0 as blocking_key
+    state = {
+        "quota_autonomous_retries": 3,
+        "stories": {"F1-1": {"column": "development"}},
+    }
+
+    with patch("agile_agent_factory.nodes.helpers.interrupt") as mock_interrupt:
+        mock_interrupt.return_value = None
+        patch_dict = raise_quota_interrupt(jira, "F1-0", exc, state=state, max_autonomous_retries=3)
+
+    # No stories entry for the unknown key
+    assert "stories" not in patch_dict or "F1-0" not in patch_dict.get("stories", {})

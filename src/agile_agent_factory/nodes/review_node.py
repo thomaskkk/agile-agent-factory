@@ -217,7 +217,7 @@ def review_node(state: PipelineState) -> dict:
             return {
                 "review_approved": False,
                 "review_retries": 0,
-                "stories": {sk: {"review_retries": 0, "review_status": "pending_review"}},
+                "stories": {sk: {"review_retries": 0, "review_status": "pending_review", "hitl_type": "review_exhaustion"}},
             }
         cycle = review_retries
         log(f"Review pre-gate failed for {sk} (retry {cycle}/{MAX_REVIEW_RETRIES}). Keeping in code_review for rework.")
@@ -317,7 +317,7 @@ def review_node(state: PipelineState) -> dict:
         return {
             "review_approved": False,
             "review_retries": 0,
-            "stories": {sk: {"review_retries": 0, "review_status": "pending_review"}},
+            "stories": {sk: {"review_retries": 0, "review_status": "pending_review", "hitl_type": "review_exhaustion"}},
         }
 
     log(f"Code review: APPROVED for {sk}.")

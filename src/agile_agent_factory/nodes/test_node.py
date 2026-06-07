@@ -228,11 +228,9 @@ def test_node(state: PipelineState) -> dict:
                 jira.clear_flag(sk)
             except Exception:
                 pass
-            retries = 0
-            correction_failures = 0
-            strategy_retries = 0
-            last_output = None
-            continue
+            # On resume: node will be re-entered from scratch; return hitl_type so the
+            # state captures why this story is blocked.
+            return {"stories": {sk: {"hitl_type": "intervention"}}}
 
         log("Requesting LLM-driven correction.")
         try:
@@ -268,11 +266,9 @@ def test_node(state: PipelineState) -> dict:
                     jira.clear_flag(sk)
                 except Exception:
                     pass
-                retries = 0
-                correction_failures = 0
-                strategy_retries = 0
-                last_output = None
-                continue
+                # On resume: node will be re-entered from scratch; return hitl_type so the
+                # state captures why this story is blocked.
+                return {"stories": {sk: {"hitl_type": "intervention"}}}
             correction_failures += 1
             log(f"No correction produced (failure {correction_failures}/{MAX_CORRECTION_FAILURES + 1}) — retrying.")
             last_output = output

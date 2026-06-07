@@ -132,9 +132,13 @@ def raise_quota_interrupt(
         }
     else:
         log("Quota exceeded — autonomous retries exhausted, suspending for human intervention")
+        # Write hitl_type into story state only when blocking_key is a known story key.
+        story_patch: dict = {}
+        if blocking_key and state and blocking_key in (state.get("stories") or {}):
+            story_patch = {"stories": {blocking_key: {"hitl_type": "quota"}}}
         interrupt({
             "type": "quota",
             "provider": getattr(exc, "provider", "unknown"),
             "blocking_key": blocking_key,
         })
-        return {}  # unreachable after interrupt(), satisfies type checker
+        return story_patch  # unreachable after interrupt(), satisfies type checker
