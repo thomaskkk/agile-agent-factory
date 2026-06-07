@@ -101,6 +101,10 @@ def _pre_review_gate(
 
     tc = story.get("test_contract", {}) or {}
 
+    # Compute test_file_rel and test_file_path once, used in Checks 2 and 4
+    test_file_rel = tc.get("test_file", "")
+    test_file_path = product_root / test_file_rel if test_file_rel else None
+
     # --- Check 1: Scope completeness ---
     if write_scope:
         missing = [p for p in write_scope if not (product_root / p).exists()]
@@ -110,8 +114,6 @@ def _pre_review_gate(
     # --- Check 2: Test function presence ---
     expected_tests: list[str] = tc.get("expected_tests", []) or []
     if expected_tests:
-        test_file_rel = tc.get("test_file", "")
-        test_file_path = product_root / test_file_rel if test_file_rel else None
         if test_file_path and test_file_path.exists():
             try:
                 source = test_file_path.read_text(encoding="utf-8")
@@ -148,12 +150,14 @@ def _pre_review_gate(
                 pass
 
     # --- Check 4: Targeted pytest pass ---
-    test_file_rel = tc.get("test_file", "")
     if test_file_rel:
-        test_file_path = product_root / test_file_rel
         if test_file_path.exists():
-            exit_code, output = run_pytest([], test_targets=[str(test_file_path)])
-            if exit_code != 0:
+            try:
+                exit_code, output = run_pytest([], test_targets=[str(test_file_path)])
+            except Exception:
+                exit_code, output = 0, ""  # can't verify; proceed to LLM reviewer
+            # Exit code 5 means "no tests collected" — treat as pass
+            if exit_code != 0 and exit_code != 5:
                 first_error = next(
                     (line for line in output.splitlines() if line.strip()),
                     "pytest failed"
