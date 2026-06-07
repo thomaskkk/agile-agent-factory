@@ -6,6 +6,8 @@ dev/test/review node modules. They contain no node entrypoints themselves.
 
 from __future__ import annotations
 
+import time
+
 from langgraph.types import interrupt
 
 from agile_agent_factory.tools.jira_client import JiraClient
@@ -86,15 +88,53 @@ def _story_summary(jira: JiraClient, story_key: str) -> str:
         return ""
 
 
-def raise_quota_interrupt(jira: JiraClient, blocking_key: str | None, exc: LLMQuotaExceeded) -> None:
-    """Notify Jira of the quota block and suspend the graph for HITL resume.
+def raise_quota_interrupt(
+    jira: JiraClient,
+    blocking_key: str | None,
+    exc: LLMQuotaExceeded,
+    state: dict | None = None,
+    max_autonomous_retries: int = 3,
+) -> dict:
+    """Notify Jira of the quota block; autonomously back off up to *max_autonomous_retries* times.
 
-    Encapsulates the repeated `_notify_quota(...)` + `interrupt({"type": "quota", ...})`
-    triplet shared by every node that calls an LLM.
+    On the first N quota errors, this function returns a partial state-update dict
+    (with ``quota_retry_after`` set to a future Unix timestamp) so the caller can
+    return it immediately to LangGraph.  ``main.py`` detects the timestamp, sleeps
+    until it passes, clears the field, and re-invokes the graph — no human needed.
+
+    Once the autonomous budget is exhausted the original ``interrupt()`` path fires,
+    suspending the graph for a human to resolve the quota limit.
+
+    The Jira notification (``_notify_quota``) fires on every quota error regardless
+    of which path is taken, so the human always has visibility.
+
+    Callers must propagate the return value::
+
+        except LLMQuotaExceeded as e:
+            patch = raise_quota_interrupt(jira, sk, e, state=state)
+            if patch:
+                return patch
+            # only reached after human resume via interrupt()
     """
     _notify_quota(jira, blocking_key, exc)
-    interrupt({
-        "type": "quota",
-        "provider": getattr(exc, "provider", "unknown"),
-        "blocking_key": blocking_key,
-    })
+
+    autonomous_retries = (state or {}).get("quota_autonomous_retries", 0)
+    if autonomous_retries < max_autonomous_retries:
+        backoff = 30 * (2 ** autonomous_retries)  # 30s, 60s, 120s, ...
+        retry_after = time.time() + backoff
+        log(
+            f"Quota exceeded — autonomous retry "
+            f"{autonomous_retries + 1}/{max_autonomous_retries} in {backoff}s"
+        )
+        return {
+            "quota_retry_after": retry_after,
+            "quota_autonomous_retries": autonomous_retries + 1,
+        }
+    else:
+        log("Quota exceeded — autonomous retries exhausted, suspending for human intervention")
+        interrupt({
+            "type": "quota",
+            "provider": getattr(exc, "provider", "unknown"),
+            "blocking_key": blocking_key,
+        })
+        return {}  # unreachable after interrupt(), satisfies type checker

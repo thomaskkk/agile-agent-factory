@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 from agile_agent_factory.config import DRY_RUN, CHECKPOINT_DB
 from agile_agent_factory.graph import build_graph
@@ -61,6 +62,9 @@ def main() -> None:
         log("Pipeline already complete. Run --reset-state to start fresh.")
         return
 
+    # Check for a pending autonomous quota backoff before invoking the graph
+    _handle_quota_backoff(graph, config, snapshot)
+
     # Fresh start or crash recovery — invoke the graph
     log("Reading business idea from ../business_idea.md.")
     graph.invoke({}, config)
@@ -69,6 +73,32 @@ def main() -> None:
 # ---------------------------------------------------------------------------
 # Resume helpers
 # ---------------------------------------------------------------------------
+
+def _handle_quota_backoff(graph, config: dict, snapshot) -> None:
+    """If the last node returned a quota_retry_after timestamp, sleep until it passes
+    and then clear the field so the next graph.invoke() runs a fresh attempt.
+
+    This implements the autonomous backoff loop for transient quota errors without
+    requiring human intervention.
+    """
+    if not snapshot or not snapshot.values:
+        return
+    quota_retry_after = snapshot.values.get("quota_retry_after")
+    if not quota_retry_after:
+        return
+
+    wait = quota_retry_after - time.time()
+    if wait > 0:
+        log(f"Quota backoff: sleeping {wait:.0f}s before autonomous retry.")
+        time.sleep(wait)
+    else:
+        log("Quota backoff timestamp already passed — retrying immediately.")
+
+    # Clear the timestamp and reset the autonomous retry counter so the next
+    # graph.invoke() runs as though quota is resolved.
+    graph.update_state(config, {"quota_retry_after": None, "quota_autonomous_retries": 0})
+    log("Quota backoff cleared. Resuming pipeline.")
+
 
 def _is_interrupted(snapshot) -> bool:
     """True when the graph is paused at an interrupt() call."""

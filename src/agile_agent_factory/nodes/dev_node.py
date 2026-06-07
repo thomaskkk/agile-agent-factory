@@ -348,7 +348,9 @@ def dev_node(state: PipelineState) -> dict:
                 model=DEV_MODEL or None,
             )
     except LLMQuotaExceeded as e:
-        raise_quota_interrupt(jira, sk, e)
+        patch = raise_quota_interrupt(jira, sk, e, state=state)
+        if patch:
+            return patch
         _generate_code_with_llm(
             blueprint,
             review_feedback=review_feedback,

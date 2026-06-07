@@ -620,3 +620,111 @@ def test_merge_stories_parallel_qa_ux_race_condition_resolved():
     assert after_both["F1-1"]["refinement_qa_done"] is True
     assert after_both["F1-1"]["refinement_ux_done"] is True
     assert after_both["F1-1"]["column"] == "refinement"  # gate, not qa/ux, advances this
+
+
+# ---------------------------------------------------------------------------
+# Quota autonomous resume — raise_quota_interrupt
+# ---------------------------------------------------------------------------
+
+def test_raise_quota_interrupt_returns_patch_on_first_autonomous_retry():
+    """When autonomous_retries < max, raise_quota_interrupt must return a state patch
+    with quota_retry_after set and must NOT call interrupt()."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+
+    with patch("agile_agent_factory.nodes.helpers.interrupt") as mock_interrupt, \
+         patch("agile_agent_factory.nodes.helpers.time") as mock_time:
+        mock_time.time.return_value = 1000.0
+        state = {"quota_autonomous_retries": 0}
+        patch_dict = raise_quota_interrupt(jira, "F1-1", exc, state=state, max_autonomous_retries=3)
+
+    mock_interrupt.assert_not_called()
+    assert "quota_retry_after" in patch_dict
+    assert patch_dict["quota_retry_after"] == 1000.0 + 30  # 30s * 2^0
+    assert patch_dict["quota_autonomous_retries"] == 1
+
+
+def test_raise_quota_interrupt_backoff_doubles_each_retry():
+    """Second retry uses 60s backoff (30 * 2^1), third uses 120s (30 * 2^2)."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+
+    with patch("agile_agent_factory.nodes.helpers.interrupt"), \
+         patch("agile_agent_factory.nodes.helpers.time") as mock_time:
+        mock_time.time.return_value = 1000.0
+
+        patch1 = raise_quota_interrupt(jira, "F1-1", exc, state={"quota_autonomous_retries": 1}, max_autonomous_retries=3)
+        assert patch1["quota_retry_after"] == 1000.0 + 60   # 30 * 2^1
+
+        patch2 = raise_quota_interrupt(jira, "F1-1", exc, state={"quota_autonomous_retries": 2}, max_autonomous_retries=3)
+        assert patch2["quota_retry_after"] == 1000.0 + 120  # 30 * 2^2
+
+
+def test_raise_quota_interrupt_calls_interrupt_when_budget_exhausted():
+    """When autonomous_retries >= max, raise_quota_interrupt must call interrupt()."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+
+    with patch("agile_agent_factory.nodes.helpers.interrupt") as mock_interrupt:
+        mock_interrupt.return_value = None  # simulate non-raising interrupt (test mode)
+        state = {"quota_autonomous_retries": 3}
+        raise_quota_interrupt(jira, "F1-1", exc, state=state, max_autonomous_retries=3)
+
+    mock_interrupt.assert_called_once()
+    call_arg = mock_interrupt.call_args[0][0]
+    assert call_arg["type"] == "quota"
+    assert call_arg["blocking_key"] == "F1-1"
+
+
+def test_raise_quota_interrupt_always_notifies_jira():
+    """_notify_quota must fire on every quota error — both autonomous and escalation paths."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+
+    # Autonomous path
+    with patch("agile_agent_factory.nodes.helpers.interrupt"), \
+         patch("agile_agent_factory.nodes.helpers.time"):
+        raise_quota_interrupt(jira, "F1-1", exc, state={"quota_autonomous_retries": 0})
+
+    jira.set_flag.assert_called_once_with("F1-1")
+    jira.add_comment_adf.assert_called_once()
+
+    jira.reset_mock()
+
+    # Escalation path (budget exhausted)
+    with patch("agile_agent_factory.nodes.helpers.interrupt") as mock_interrupt:
+        mock_interrupt.return_value = None
+        raise_quota_interrupt(jira, "F1-1", exc, state={"quota_autonomous_retries": 3}, max_autonomous_retries=3)
+
+    jira.set_flag.assert_called_once_with("F1-1")
+    jira.add_comment_adf.assert_called_once()
+
+
+def test_raise_quota_interrupt_default_state_none():
+    """raise_quota_interrupt must work when state=None (backwards-compatible default)."""
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+
+    with patch("agile_agent_factory.nodes.helpers.interrupt"), \
+         patch("agile_agent_factory.nodes.helpers.time") as mock_time:
+        mock_time.time.return_value = 500.0
+        # Calling with state=None (default) — should treat autonomous_retries as 0
+        patch_dict = raise_quota_interrupt(jira, None, exc)
+
+    assert "quota_retry_after" in patch_dict
+    assert patch_dict["quota_autonomous_retries"] == 1

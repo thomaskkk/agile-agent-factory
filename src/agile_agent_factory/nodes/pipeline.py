@@ -57,7 +57,9 @@ def po_node(state: PipelineState) -> dict:
     try:
         result = analyze_and_provision(jira, legacy)
     except LLMQuotaExceeded as e:
-        raise_quota_interrupt(jira, None, e)
+        patch = raise_quota_interrupt(jira, None, e, state=state)
+        if patch:
+            return patch
         result = analyze_and_provision(jira, legacy)
 
     # Milestone 7: risk-threshold policy gate replaces binary hitl_required flag.
@@ -75,7 +77,9 @@ def po_node(state: PipelineState) -> dict:
         try:
             result = analyze_and_provision(jira, legacy)
         except LLMQuotaExceeded as e:
-            raise_quota_interrupt(jira, blocking_key, e)
+            patch = raise_quota_interrupt(jira, blocking_key, e, state=state)
+            if patch:
+                return patch
             result = analyze_and_provision(jira, legacy)
 
     epic_keys = result.payload.get("epic_keys", [])
@@ -114,7 +118,9 @@ def qa_node(state: PipelineState) -> dict:
     try:
         result = inject_gherkin_criteria(jira, [sk])
     except LLMQuotaExceeded as e:
-        raise_quota_interrupt(jira, sk, e)
+        patch = raise_quota_interrupt(jira, sk, e, state=state)
+        if patch:
+            return patch
         result = inject_gherkin_criteria(jira, [sk])
 
     criteria = result.payload["gherkin_criteria"].get(sk, [])
@@ -147,7 +153,9 @@ def ux_node(state: PipelineState) -> dict:
     try:
         spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
     except LLMQuotaExceeded as e:
-        raise_quota_interrupt(jira, sk, e)
+        patch = raise_quota_interrupt(jira, sk, e, state=state)
+        if patch:
+            return patch
         spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
 
     # Just set the flag — dispatcher/refinement_gate advances the column.
@@ -199,7 +207,9 @@ def tl_node(state: PipelineState) -> dict:
         result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
     except LLMQuotaExceeded as e:
         bk = story_keys[0] if story_keys else None
-        raise_quota_interrupt(jira, bk, e)
+        patch = raise_quota_interrupt(jira, bk, e, state=state)
+        if patch:
+            return patch
         result = design_architecture(jira, story_keys, gherkin, ux_spec, legacy, ready_contracts=ready_contracts)
 
     payload = result.payload

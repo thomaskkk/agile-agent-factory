@@ -78,3 +78,7 @@ class PipelineState(TypedDict, total=False):
     dependencies: list
     review_retries: int
     review_approved: bool
+
+    # Quota autonomous-resume fields
+    quota_retry_after: float | None  # Unix timestamp; None = no pending quota backoff
+    quota_autonomous_retries: int    # counts autonomous retries already consumed (resets to 0 on success)

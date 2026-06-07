@@ -247,7 +247,9 @@ def review_node(state: PipelineState) -> dict:
     try:
         result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
     except LLMQuotaExceeded as e:
-        raise_quota_interrupt(jira, sk, e)
+        patch = raise_quota_interrupt(jira, sk, e, state=state)
+        if patch:
+            return patch
         result = review_patch(jira, [sk], story_criteria=story_criteria or None, story_key=sk, write_scope=write_scope or None)
 
     approved = result.payload.get("approved", False)
