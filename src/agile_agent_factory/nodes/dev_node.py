@@ -8,10 +8,12 @@ _extract_error_summary, _load_dev_context) are shared with test_node.
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
-from agile_agent_factory.config import PRODUCT_ROOT, DEV_MODEL, bp_task_path
+from agile_agent_factory.config import PRODUCT_ROOT, DEV_MODEL, LLM_MAX_TOKENS, bp_task_path
 from agile_agent_factory.tools.jira_client import JiraClient
-from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm_json
+from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm, call_llm_json
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.path_utils import normalize_generated_path, resolve_namespace_collision
 from agile_agent_factory.tools.workflow import WorkflowState
@@ -29,24 +31,40 @@ def _load_dev_context(story_key: str) -> str:
     return task_path.read_text() if task_path.exists() else ""
 
 
-def _write_generated_files(files: list) -> list[str]:
+def _write_generated_files(files: list, write_scope: list[str] | None = None) -> list[str]:
     written: list[str] = []
     for f in files:
+        path_str = f.get("path", "")
+        if write_scope and path_str not in write_scope:
+            log(f"Dev: skipping out-of-scope write: {path_str} (not in write_scope)")
+            continue
         try:
-            target = normalize_generated_path(f["path"])
+            target = normalize_generated_path(path_str)
             target.parent.mkdir(parents=True, exist_ok=True)
             if not resolve_namespace_collision(target):
                 continue
             target.write_text(f.get("content", ""))
             log(f"Wrote: {target}")
-            written.append(f["path"])
+            written.append(path_str)
         except (ValueError, KeyError) as e:
             log(f"Skipped invalid path {f.get('path', '?')}: {e}")
     return written
 
 
-def _generate_code_with_llm(blueprint: str, review_feedback: str = "", model: str | None = None) -> None:
+def _generate_code_with_llm(
+    blueprint: str,
+    review_feedback: str = "",
+    write_scope: list[str] | None = None,
+    model: str | None = None,
+) -> None:
     if review_feedback:
+        scope_instruction = ""
+        if write_scope:
+            scope_instruction = (
+                f"\nYou MUST fix the files in the write scope: {', '.join(write_scope)}. "
+                "Only change other files if strictly required by the fix. "
+                "Do not touch files outside the write scope unless they directly cause this rejection.\n"
+            )
         system = (
             "You are a senior Python developer fixing a code review rejection. "
             "Return a JSON list of ONLY the files that must change to fix the rejection. "
@@ -62,7 +80,7 @@ def _generate_code_with_llm(blueprint: str, review_feedback: str = "", model: st
 
 Reviewer rejection (you MUST fix this):
 {review_feedback}
-
+{scope_instruction}
 Architecture context (read-only — do not re-implement from scratch):
 {blueprint}
 """
@@ -82,11 +100,76 @@ Blueprint:
 {blueprint}
 """
     files = call_llm_json(prompt, system=system, fallback=_FILE_FALLBACK, model=model)
-    _write_generated_files(files)
+    _write_generated_files(files, write_scope=write_scope)
 
 
-def _correct_code(blueprint: str, traceback: str, model: str | None = None) -> list[str]:
-    """Ask the LLM to fix failing tests. Returns list of written file paths, or []."""
+def _is_truncated_json(raw: str) -> bool:
+    """Heuristic: detect if the LLM's JSON array response was cut short."""
+    stripped = raw.strip()
+    if not stripped:
+        return False
+    # Unterminated array: starts with [ but last non-whitespace char is not ]
+    if stripped[0] == "[" and stripped[-1] != "]":
+        return True
+    # Near max-token limit (rough estimate: 4 chars per token)
+    if len(stripped) >= LLM_MAX_TOKENS * 4 * 0.95:
+        return True
+    return False
+
+
+def _parse_correction_response(raw: str) -> list | None:
+    """Multi-strategy JSON parser for correction responses. Returns None on total failure."""
+    import re as _re
+
+    fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw.strip())
+    cleaned = fence.group(1).strip() if fence else raw.strip()
+
+    # Direct parse
+    try:
+        result = json.loads(cleaned)
+        if isinstance(result, dict):
+            return [result]
+        if isinstance(result, list):
+            return [f for f in result if isinstance(f, dict)]
+    except json.JSONDecodeError:
+        pass
+
+    # Outermost array/object extraction
+    for sc, ec in (("[", "]"), ("{", "}")):
+        s = cleaned.find(sc)
+        e = cleaned.rfind(ec)
+        if s != -1 and e > s:
+            try:
+                result = json.loads(cleaned[s:e + 1])
+                if isinstance(result, dict):
+                    return [result]
+                if isinstance(result, list):
+                    return [f for f in result if isinstance(f, dict)]
+            except json.JSONDecodeError:
+                pass
+
+    # json-repair as last resort
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(cleaned, return_objects=True)
+        if isinstance(repaired, list) and repaired:
+            return [f for f in repaired if isinstance(f, dict)]
+    except Exception:
+        pass
+
+    return None
+
+
+def _correct_code(blueprint: str, traceback: str, model: str | None = None, write_scope: list[str] | None = None) -> tuple[str, list[str]]:
+    """Ask the LLM to fix failing tests.
+
+    Returns (status, written_files):
+        "ok"        — correction produced and wrote usable files
+        "truncated" — LLM response was truncated; caller should use strategy-retry budget
+        "empty"     — LLM returned nothing usable; caller should use correction-failure budget
+    """
+    from agile_agent_factory.nodes.failure_recovery import files_from_traceback
+
     generated: dict[str, str] = {}
     for target_dir in ("app", "tests"):
         d = PRODUCT_ROOT / target_dir
@@ -95,10 +178,19 @@ def _correct_code(blueprint: str, traceback: str, model: str | None = None) -> l
                 rel = str(f.relative_to(PRODUCT_ROOT))
                 generated[rel] = f.read_text()
 
-    files_block = "\n\n".join(
+    # Prioritize traceback-named files: show at FULL content so they're never truncated.
+    tb_files = files_from_traceback(traceback)
+    tb_set = set(tb_files)
+    priority_fences = [
+        f"### {path}\n```python\n{generated[path]}\n```"
+        for path in tb_files if path in generated
+    ]
+    rest_budget = max(0, 20 - len(priority_fences))
+    rest_fences = [
         f"### {path}\n```python\n{content[:6000]}\n```"
-        for path, content in list(generated.items())[:20]
-    )
+        for path, content in ((p, c) for p, c in generated.items() if p not in tb_set)
+    ][:rest_budget]
+    files_block = "\n\n".join(priority_fences + rest_fences)
 
     system = (
         "You are a Python developer fixing a failing test suite. "
@@ -125,24 +217,52 @@ Current source files:
 {files_block}
 """
     try:
-        files = call_llm_json(prompt, system=system, model=model, prefill="[")
-    except json.JSONDecodeError:
-        log("LLM correction produced unparseable response — no files written.")
-        return []
-    if isinstance(files, dict):
-        files = [files]
-    elif isinstance(files, list):
-        # Filter out any non-dict elements (stray strings, nested lists, etc.)
-        files = [f for f in files if isinstance(f, dict)]
-    else:
-        log(f"LLM correction returned unexpected type ({type(files).__name__}) — no files written.")
-        return []
+        raw = call_llm(prompt, system=system, model=model, prefill="[")
+    except LLMQuotaExceeded:
+        raise
+
+    is_truncated = _is_truncated_json(raw)
+    files = _parse_correction_response(raw)
+
+    if files is None:
+        if is_truncated:
+            log("Correction response truncated — retrying with reduced scope (worst file only).")
+            worst = tb_files[0] if tb_files else (list(generated.keys())[0] if generated else None)
+            if worst and worst in generated:
+                reduced_block = f"### {worst}\n```python\n{generated[worst]}\n```"
+                reduced_prompt = f"""[
+  {{"path": "app/file_to_fix.py", "content": "FULL CORRECTED CONTENT HERE"}}
+]
+
+Fix ONLY the single most critical file causing the failure below.
+
+Traceback:
+{traceback}
+
+Current source files:
+{reduced_block}
+"""
+                try:
+                    raw2 = call_llm(reduced_prompt, system=system, model=model, prefill="[")
+                    files = _parse_correction_response(raw2)
+                except (LLMQuotaExceeded, Exception) as e:
+                    log(f"Reduced-scope retry failed: {e}")
+                    files = None
+            if files is None:
+                log("Truncation retry also failed — flagging as strategy retry.")
+                return ("truncated", [])
+        else:
+            log("LLM correction produced unparseable response — no files written.")
+            return ("empty", [])
+
+    files = [f for f in files if isinstance(f, dict)]
     if not files:
         log("LLM correction returned no usable file entries — no files written.")
-        return []
-    written = _write_generated_files(files)
+        return ("empty", [])
+
+    written = _write_generated_files(files, write_scope=write_scope)
     log(f"Correction applied: {len(written)} file(s) updated.")
-    return written
+    return ("ok", written)
 
 
 def _extract_error_summary(output: str) -> str:
@@ -175,6 +295,20 @@ def dev_node(state: PipelineState) -> dict:
     blueprint = _load_dev_context(sk)
     review_feedback = story.get("review_rejection_reason", "")
 
+    # Derive write_scope from test_contract so rework is targeted to owned files
+    tc = story.get("test_contract", {})
+    write_scope: list[str] = []
+    if tc and is_rework:
+        if tc.get("test_file"):
+            write_scope.append(tc["test_file"])
+        for imp in (tc.get("target_imports") or []):
+            if isinstance(imp, str) and imp.strip():
+                m = re.match(r"from (app(?:\.\w+)+) import", imp)
+                if m:
+                    path_str = m.group(1).replace(".", "/") + ".py"
+                    if path_str not in write_scope:
+                        write_scope.append(path_str)
+
     try:
         from agile_agent_factory.tools.aider_client import is_available, run_task
         if is_available():
@@ -187,10 +321,16 @@ def dev_node(state: PipelineState) -> dict:
             )
         else:
             log("Aider unavailable — using LLM-direct code generation.")
-            _generate_code_with_llm(blueprint, review_feedback=review_feedback, model=DEV_MODEL or None)
+            _generate_code_with_llm(
+                blueprint,
+                review_feedback=review_feedback,
+                write_scope=write_scope or None,
+                model=DEV_MODEL or None,
+            )
     except LLMQuotaExceeded as e:
-        raise_quota_interrupt(jira, sk, e)
-        _generate_code_with_llm(blueprint, review_feedback=review_feedback, model=DEV_MODEL or None)
+        patch = raise_quota_interrupt(jira, sk, e, state=state)
+        if patch:
+            return patch
 
     if is_rework:
         return {
