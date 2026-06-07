@@ -72,3 +72,36 @@ def test_normalize_strips_hallucinated_project_prefix_tests(monkeypatch, tmp_pat
     (tmp_path / "tests").mkdir()
     result = path_utils.normalize_generated_path("Factory_project_claude/tests/test_recipes_list.py")
     assert result == tmp_path / "tests/test_recipes_list.py"
+
+
+def test_collision_guard_package_removes_shadow(tmp_path):
+    """Writing __init__.py removes the same-named .py shadow."""
+    import agile_agent_factory.tools.path_utils as path_utils
+    shadow = tmp_path / "app" / "models.py"
+    shadow.parent.mkdir(parents=True)
+    shadow.write_text("# shadow")
+    init = tmp_path / "app" / "models" / "__init__.py"
+    init.parent.mkdir(parents=True)
+    result = path_utils.resolve_namespace_collision(init)
+    assert result is True
+    assert not shadow.exists(), "shadow .py should be removed when package __init__.py is written"
+
+
+def test_collision_guard_flat_file_skipped_if_package_exists(tmp_path):
+    """Writing a .py file is skipped when the same-named package already exists."""
+    import agile_agent_factory.tools.path_utils as path_utils
+    init = tmp_path / "app" / "models" / "__init__.py"
+    init.parent.mkdir(parents=True)
+    init.write_text("")
+    target = tmp_path / "app" / "models.py"
+    result = path_utils.resolve_namespace_collision(target)
+    assert result is False, "should return False (skip) when package already claims this namespace"
+
+
+def test_collision_guard_no_collision_returns_true(tmp_path):
+    """No collision → returns True (safe to write)."""
+    import agile_agent_factory.tools.path_utils as path_utils
+    target = tmp_path / "app" / "utils.py"
+    target.parent.mkdir(parents=True)
+    result = path_utils.resolve_namespace_collision(target)
+    assert result is True

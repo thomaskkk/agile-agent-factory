@@ -38,3 +38,25 @@ def normalize_generated_path(raw_path: str) -> Path:
         )
 
     return result
+
+
+def resolve_namespace_collision(target: Path) -> bool:
+    """Prevent Python namespace collisions between same-named package dirs and .py files.
+
+    Writing X/__init__.py: removes X.py if it exists (package shadows the file).
+    Writing X.py: skips the write if X/__init__.py already exists (package wins).
+    Returns True to proceed, False to skip.
+    """
+    from agile_agent_factory.tools.logger import log
+
+    if target.name == "__init__.py":
+        shadow = target.parent.parent / (target.parent.name + ".py")
+        if shadow.exists():
+            log(f"Namespace collision: removing {shadow} (shadowed by package {target.parent}/)")
+            shadow.unlink()
+    else:
+        pkg_init = target.parent / target.stem / "__init__.py"
+        if pkg_init.exists():
+            log(f"Namespace collision: skipping {target} — {target.parent / target.stem}/ package already owns this namespace")
+            return False
+    return True
