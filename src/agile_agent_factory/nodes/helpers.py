@@ -94,7 +94,7 @@ def raise_quota_interrupt(
     exc: LLMQuotaExceeded,
     state: dict | None = None,
     max_autonomous_retries: int = 3,
-) -> dict:
+) -> dict | None:
     """Notify Jira of the quota block; autonomously back off up to *max_autonomous_retries* times.
 
     On the first N quota errors, this function returns a partial state-update dict

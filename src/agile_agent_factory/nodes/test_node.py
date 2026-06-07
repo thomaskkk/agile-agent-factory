@@ -199,10 +199,6 @@ def test_node(state: PipelineState) -> dict:
                     patch = raise_quota_interrupt(jira, sk, e, state=state)
                     if patch:
                         return patch
-                    # retry the call after human resume (interrupt() was called above)
-                    correction_status, corrected = _correct_code(
-                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None
-                    )
                 strategy_retries += 1
 
                 if correction_status == "truncated":
@@ -245,8 +241,6 @@ def test_node(state: PipelineState) -> dict:
             patch = raise_quota_interrupt(jira, sk, e, state=state)
             if patch:
                 return patch
-            # retry the call after human resume (interrupt() was called above)
-            correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None)
 
         # Truncation: strategy retry budget (not the LLM reasoning budget)
         if correction_status == "truncated":

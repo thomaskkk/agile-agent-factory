@@ -96,7 +96,11 @@ def _handle_quota_backoff(graph, config: dict, snapshot) -> None:
 
     # Clear the timestamp and reset the autonomous retry counter so the next
     # graph.invoke() runs as though quota is resolved.
-    graph.update_state(config, {"quota_retry_after": None, "quota_autonomous_retries": 0})
+    try:
+        graph.update_state(config, {"quota_retry_after": None, "quota_autonomous_retries": 0})
+    except Exception as e:
+        log(f"Quota backoff: failed to clear state ({e}); will retry on next run")
+        return
     log("Quota backoff cleared. Resuming pipeline.")
 
 

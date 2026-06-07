@@ -351,12 +351,6 @@ def dev_node(state: PipelineState) -> dict:
         patch = raise_quota_interrupt(jira, sk, e, state=state)
         if patch:
             return patch
-        _generate_code_with_llm(
-            blueprint,
-            review_feedback=review_feedback,
-            write_scope=write_scope or None,
-            model=DEV_MODEL or None,
-        )
 
     if is_rework:
         return {
