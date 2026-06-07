@@ -13,7 +13,7 @@ from agile_agent_factory.config import PRODUCT_ROOT, DEV_MODEL, bp_task_path
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm_json
 from agile_agent_factory.tools.logger import log
-from agile_agent_factory.tools.path_utils import normalize_generated_path
+from agile_agent_factory.tools.path_utils import normalize_generated_path, resolve_namespace_collision
 from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
@@ -35,6 +35,8 @@ def _write_generated_files(files: list) -> list[str]:
         try:
             target = normalize_generated_path(f["path"])
             target.parent.mkdir(parents=True, exist_ok=True)
+            if not resolve_namespace_collision(target):
+                continue
             target.write_text(f.get("content", ""))
             log(f"Wrote: {target}")
             written.append(f["path"])
