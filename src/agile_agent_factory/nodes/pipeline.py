@@ -318,12 +318,13 @@ def finalize_node(state: PipelineState) -> dict:
             if f not in file_to_owner:
                 file_to_owner[f] = candidate_sk
 
+    jira_warned_count = 0
     unresolved_count = 0
     for quarantine_sk, story in blocker_stories.items():
         for blocker_file in story.get("regression_blockers", []):
             owning_sk = file_to_owner.get(blocker_file)
             if owning_sk is None:
-                # No owner found — count as unresolved but no Jira comment to post.
+                # No owner found — truly unresolved, no Jira comment to post.
                 unresolved_count += 1
                 log(
                     f"Finalize: unresolved regression blocker {blocker_file!r} "
@@ -341,7 +342,7 @@ def finalize_node(state: PipelineState) -> dict:
                 )
                 continue
             # Owning story is done — post a Jira warning so the team knows.
-            unresolved_count += 1
+            jira_warned_count += 1
             warning_text = (
                 f"Unresolved cross-story regression: {blocker_file} was modified by "
                 f"story {quarantine_sk} but this story owns the file. "
@@ -354,11 +355,13 @@ def finalize_node(state: PipelineState) -> dict:
                 log(f"Finalize: failed to post Jira warning on {owning_sk}: {exc}")
 
     summary = f"Pipeline finalized: {len(story_keys)} story/stories done."
+    parts = []
+    if jira_warned_count > 0:
+        parts.append(f"{jira_warned_count} cross-story regression(s) flagged to owning stories")
     if unresolved_count > 0:
-        summary += (
-            f"\n\nWarning: {unresolved_count} unresolved cross-story regression(s). "
-            f"See Jira for details."
-        )
+        parts.append(f"{unresolved_count} cross-story regression(s) with no identifiable owner")
+    if parts:
+        summary += "\n\nRegression blockers: " + "; ".join(parts) + "."
     log(summary)
 
     return {

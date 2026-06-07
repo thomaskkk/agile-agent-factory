@@ -689,6 +689,41 @@ def test_finalize_node_skips_jira_warning_when_owning_story_not_done():
     jira.add_comment_adf.assert_not_called()
 
 
+def test_finalize_node_no_owner_for_regression_blocker():
+    """finalize_node: if no story owns the regression blocker file, count it as truly unresolved."""
+    from agile_agent_factory.nodes import finalize_node
+    from agile_agent_factory.agents import readme_agent, sre_agent
+
+    # F1-1 quarantined a regression in app/orphan.py, but no story's test_contract covers it.
+    state = {
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "done",
+                "test_contract": {
+                    "test_file": "tests/test_main.py",
+                    "target_imports": ["from app.main import run"],
+                },
+                "regression_blockers": ["app/orphan.py"],
+            },
+        },
+        "epic_keys": [],
+        "subtasks": {},
+    }
+
+    jira = MagicMock()
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
+         patch.object(readme_agent, "generate_readme"), \
+         patch.object(sre_agent, "emulate_deployment"):
+        result = finalize_node(state)
+
+    # Story marked done
+    assert result["done_count"] == 1
+    assert result["stories"]["F1-1"]["column"] == "done"
+    # No Jira comment posted (no owner to notify)
+    jira.add_comment_adf.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # merge_stories reducer
 # ---------------------------------------------------------------------------
