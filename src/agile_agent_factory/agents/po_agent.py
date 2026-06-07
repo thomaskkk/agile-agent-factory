@@ -17,6 +17,24 @@ _HITL_FALLBACK = {
     "epics": [],
 }
 
+# Legacy string-based confidence/impact levels (for backward compatibility with older LLM outputs)
+_LEGACY_CONF = {"low": 0.3, "medium": 0.5, "high": 0.8}
+
+
+def _to_float(val, default: float = 0.5) -> float:
+    """
+    Coerce a value to float, supporting both numeric and legacy string formats.
+
+    - Numeric (int/float): returned as-is
+    - String: mapped via _LEGACY_CONF; unrecognised strings default to 0.5
+    - Other types: default to 0.5
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        return _LEGACY_CONF.get(val.lower(), default)
+    return default
+
 
 def read_business_idea() -> str:
     log(f"Reading business idea from {BUSINESS_IDEA_PATH}.")
@@ -92,8 +110,9 @@ def analyze_and_provision(jira: JiraClient, state: dict) -> AgentResult:
     # Compute unresolved risk score: impact-weighted mean of (1 - confidence).
     # High-impact + low-confidence assumptions drive the score up; low-impact ambiguity
     # does not inflate the score needlessly.
+    # Uses _to_float to handle both numeric and legacy string-based confidence/impact.
     risk_score = (
-        sum(a.get("impact", 0.5) * (1 - a.get("confidence", 0.5)) for a in assumptions)
+        sum(_to_float(a.get("impact")) * (1 - _to_float(a.get("confidence"))) for a in assumptions)
         / max(len(assumptions), 1)
         if assumptions else 0.0
     )
