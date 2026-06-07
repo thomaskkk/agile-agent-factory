@@ -358,7 +358,7 @@ def test_review_node_routes_rework_when_gate_fails():
     with (
         patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing required files: ['app/x.py']")),
         patch("agile_agent_factory.agents.reviewer_agent.review_patch") as mock_review,
-        patch("agile_agent_factory.tools.jira_client.JiraClient") as MockJira,
+        patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
     ):
         mock_jira_inst = MagicMock()
         MockJira.return_value = mock_jira_inst
