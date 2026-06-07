@@ -571,6 +571,124 @@ def test_finalize_node_marks_all_stories_done():
     assert result["done_count"] == 2
 
 
+def test_finalize_node_no_regression_blockers_behaves_as_before():
+    """finalize_node with no regression_blockers: identical behaviour, no Jira comment posted."""
+    from agile_agent_factory.nodes import finalize_node
+    from agile_agent_factory.agents import readme_agent, sre_agent
+
+    state = {
+        "stories": {
+            "F1-1": {"story_key": "F1-1", "column": "code_review"},
+            "F1-2": {"story_key": "F1-2", "column": "code_review"},
+        },
+        "epic_keys": [],
+        "subtasks": {},
+    }
+
+    jira = MagicMock()
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
+         patch.object(readme_agent, "generate_readme"), \
+         patch.object(sre_agent, "emulate_deployment"):
+        result = finalize_node(state)
+
+    # Stories marked done, done_count correct
+    assert result["done_count"] == 2
+    assert all(s["column"] == "done" for s in result["stories"].values())
+    # No Jira regression comment posted
+    jira.add_comment_adf.assert_not_called()
+
+
+def test_finalize_node_posts_jira_warning_for_regression_blocker_owned_by_done_story():
+    """finalize_node with a regression blocker whose owning story is done: posts Jira warning."""
+    from agile_agent_factory.nodes import finalize_node
+    from agile_agent_factory.agents import readme_agent, sre_agent
+
+    # F1-2 owns app/feature.py via its test_contract; F1-1 quarantined a regression in that file.
+    state = {
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "done",
+                "test_contract": {
+                    "test_file": "tests/test_main.py",
+                    "target_imports": ["from app.main import run"],
+                },
+                "regression_blockers": ["app/feature.py"],
+            },
+            "F1-2": {
+                "story_key": "F1-2",
+                "column": "done",
+                "test_contract": {
+                    "test_file": "tests/test_feature.py",
+                    "target_imports": ["from app.feature import do_thing"],
+                },
+                "regression_blockers": [],
+            },
+        },
+        "epic_keys": [],
+        "subtasks": {},
+    }
+
+    jira = MagicMock()
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
+         patch.object(readme_agent, "generate_readme"), \
+         patch.object(sre_agent, "emulate_deployment"):
+        result = finalize_node(state)
+
+    # Both stories marked done
+    assert result["done_count"] == 2
+    # Jira warning posted on the owning story (F1-2)
+    jira.add_comment_adf.assert_called_once()
+    call_args = jira.add_comment_adf.call_args
+    assert call_args[0][0] == "F1-2"
+    comment_text = call_args[0][1]["content"][0]["content"][0]["text"]
+    assert "app/feature.py" in comment_text
+    assert "F1-1" in comment_text
+
+
+def test_finalize_node_skips_jira_warning_when_owning_story_not_done():
+    """finalize_node: if the owning story is not in 'done', skip the Jira warning (will resolve naturally)."""
+    from agile_agent_factory.nodes import finalize_node
+    from agile_agent_factory.agents import readme_agent, sre_agent
+
+    # F1-2 owns app/feature.py but it is still in 'testing'; F1-1 has the blocker.
+    state = {
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "done",
+                "test_contract": {
+                    "test_file": "tests/test_main.py",
+                    "target_imports": ["from app.main import run"],
+                },
+                "regression_blockers": ["app/feature.py"],
+            },
+            "F1-2": {
+                "story_key": "F1-2",
+                "column": "testing",  # not done yet
+                "test_contract": {
+                    "test_file": "tests/test_feature.py",
+                    "target_imports": ["from app.feature import do_thing"],
+                },
+                "regression_blockers": [],
+            },
+        },
+        "epic_keys": [],
+        "subtasks": {},
+    }
+
+    jira = MagicMock()
+    with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
+         patch.object(readme_agent, "generate_readme"), \
+         patch.object(sre_agent, "emulate_deployment"):
+        result = finalize_node(state)
+
+    # Both stories still get marked done by finalize
+    assert result["done_count"] == 2
+    # No Jira comment — owning story hasn't finished, blocker will resolve naturally
+    jira.add_comment_adf.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # merge_stories reducer
 # ---------------------------------------------------------------------------

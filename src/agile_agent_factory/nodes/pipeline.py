@@ -276,8 +276,10 @@ def refinement_gate_node(state: PipelineState) -> dict:
 
 def finalize_node(state: PipelineState) -> dict:
     """Run README generation and SRE deployment once all stories are done."""
+    import re
     from agile_agent_factory.agents.readme_agent import generate_readme
     from agile_agent_factory.agents.sre_agent import emulate_deployment
+    from agile_agent_factory.tools.jira_client import make_adf_doc
 
     jira = JiraClient()
     story_keys = _story_keys(state)
@@ -288,6 +290,77 @@ def finalize_node(state: PipelineState) -> dict:
     emulate_deployment(jira, story_keys, legacy)
 
     stories_update = {sk: {"column": "done"} for sk in story_keys}
+
+    # --- Blocker resolution pass ---
+    # Collect stories whose test_node quarantined cross-story regressions.
+    all_stories = state.get("stories", {})
+    blocker_stories = {
+        sk: story
+        for sk, story in all_stories.items()
+        if story.get("regression_blockers")
+    }
+
+    # Build a map: file path → owning story key (the story whose write_scope covers that file).
+    def _write_scope_for_story(story: dict) -> list[str]:
+        tc = story.get("test_contract") or {}
+        scope: list[str] = []
+        if tc.get("test_file"):
+            scope.append(tc["test_file"])
+        for imp in tc.get("target_imports", []):
+            m = re.match(r"from (app(?:\.\w+)+) import", imp)
+            if m:
+                scope.append(m.group(1).replace(".", "/") + ".py")
+        return scope
+
+    file_to_owner: dict[str, str] = {}
+    for candidate_sk, candidate_story in all_stories.items():
+        for f in _write_scope_for_story(candidate_story):
+            if f not in file_to_owner:
+                file_to_owner[f] = candidate_sk
+
+    unresolved_count = 0
+    for quarantine_sk, story in blocker_stories.items():
+        for blocker_file in story.get("regression_blockers", []):
+            owning_sk = file_to_owner.get(blocker_file)
+            if owning_sk is None:
+                # No owner found — count as unresolved but no Jira comment to post.
+                unresolved_count += 1
+                log(
+                    f"Finalize: unresolved regression blocker {blocker_file!r} "
+                    f"(quarantined by {quarantine_sk}); no owning story found."
+                )
+                continue
+            owning_story = all_stories.get(owning_sk, {})
+            owning_column = owning_story.get("column", "")
+            if owning_column != "done":
+                # The owning story hasn't finished yet; it will pick up the regression
+                # naturally when it reaches testing. Skip silently.
+                log(
+                    f"Finalize: blocker {blocker_file!r} owned by {owning_sk} "
+                    f"(column={owning_column!r}); will resolve naturally — skipping."
+                )
+                continue
+            # Owning story is done — post a Jira warning so the team knows.
+            unresolved_count += 1
+            warning_text = (
+                f"Unresolved cross-story regression: {blocker_file} was modified by "
+                f"story {quarantine_sk} but this story owns the file. "
+                f"Manual review required."
+            )
+            log(f"Finalize: posting Jira regression warning on {owning_sk}: {warning_text}")
+            try:
+                jira.add_comment_adf(owning_sk, make_adf_doc(warning_text))
+            except Exception as exc:  # noqa: BLE001
+                log(f"Finalize: failed to post Jira warning on {owning_sk}: {exc}")
+
+    summary = f"Pipeline finalized: {len(story_keys)} story/stories done."
+    if unresolved_count > 0:
+        summary += (
+            f"\n\nWarning: {unresolved_count} unresolved cross-story regression(s). "
+            f"See Jira for details."
+        )
+    log(summary)
+
     return {
         "stories": stories_update,
         "done_count": len(story_keys),
