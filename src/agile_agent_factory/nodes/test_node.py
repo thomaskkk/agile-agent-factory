@@ -10,12 +10,13 @@ from agile_agent_factory.config import (
 from agile_agent_factory.tools.jira_client import (
     JiraClient, make_adf_bullet_list, make_adf_doc, make_adf_heading,
 )
+from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.dependencies import resolve_dependencies
 from agile_agent_factory.tools.pytest_runner import run_pytest
 from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
-from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _to_legacy_state
+from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _to_legacy_state, raise_quota_interrupt
 from agile_agent_factory.nodes.dev_node import _load_dev_context, _correct_code, _extract_error_summary
 from agile_agent_factory.nodes.failure_recovery import (
     classify_failure,
@@ -190,9 +191,18 @@ def test_node(state: PipelineState) -> dict:
             if strategy_retries < MAX_STRATEGY_RETRIES:
                 hint = _failure_hint(failure_class)
                 log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
-                correction_status, corrected = _correct_code(
-                    blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None
-                )
+                try:
+                    correction_status, corrected = _correct_code(
+                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None
+                    )
+                except LLMQuotaExceeded as e:
+                    patch = raise_quota_interrupt(jira, sk, e, state=state)
+                    if patch:
+                        return patch
+                    # retry the call after human resume (interrupt() was called above)
+                    correction_status, corrected = _correct_code(
+                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None
+                    )
                 strategy_retries += 1
 
                 if correction_status == "truncated":
@@ -229,7 +239,14 @@ def test_node(state: PipelineState) -> dict:
             continue
 
         log("Requesting LLM-driven correction.")
-        correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None)
+        try:
+            correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None)
+        except LLMQuotaExceeded as e:
+            patch = raise_quota_interrupt(jira, sk, e, state=state)
+            if patch:
+                return patch
+            # retry the call after human resume (interrupt() was called above)
+            correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None)
 
         # Truncation: strategy retry budget (not the LLM reasoning budget)
         if correction_status == "truncated":
