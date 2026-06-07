@@ -306,3 +306,51 @@ def test_scaffold_missing_test_function_skips_existing(tmp_path, monkeypatch):
 def test_scaffold_missing_test_function_empty_output():
     result = _mod()._scaffold_missing_test_function("no errors here", None)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _scaffold_missing_module — namespace collision guard
+# ---------------------------------------------------------------------------
+
+def test_scaffold_missing_module_skips_init_when_flat_module_exists(tmp_path, monkeypatch):
+    """_scaffold_missing_module must NOT create app/models/__init__.py when app/models.py exists."""
+    import agile_agent_factory.tools.path_utils as path_utils
+    import agile_agent_factory.nodes.failure_recovery as fr
+    monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
+    importlib.reload(fr)
+
+    # Pre-existing flat module
+    (tmp_path / "app").mkdir(parents=True)
+    flat = tmp_path / "app" / "models.py"
+    flat.write_text("# real Recipe module")
+
+    output = "No module named 'app.models.recipe'"
+    fr._scaffold_missing_module(output)
+
+    # The flat module must still exist (not removed)
+    assert flat.exists(), "app/models.py must not be deleted"
+    # The package __init__ must NOT have been created (collision avoided)
+    pkg_init = tmp_path / "app" / "models" / "__init__.py"
+    assert not pkg_init.exists(), "app/models/__init__.py must not be created when app/models.py exists"
+
+
+def test_scaffold_missing_module_removes_shadow_when_creating_package(tmp_path, monkeypatch):
+    """When scaffolding __init__.py, remove the same-named .py shadow."""
+    import agile_agent_factory.tools.path_utils as path_utils
+    import agile_agent_factory.nodes.failure_recovery as fr
+    monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
+    importlib.reload(fr)
+
+    # Pre-existing flat module at app/services.py
+    (tmp_path / "app").mkdir(parents=True)
+    flat = tmp_path / "app" / "services.py"
+    flat.write_text("")
+    (tmp_path / "app" / "__init__.py").write_text("")
+
+    # Scaffold a submodule: app.services.recipe_service
+    output = "No module named 'app.services.recipe_service'"
+    fr._scaffold_missing_module(output)
+
+    # The flat services.py should be removed (package took over)
+    assert not flat.exists(), "app/services.py should be removed when package app/services/ is created"
+    assert (tmp_path / "app" / "services" / "__init__.py").exists()

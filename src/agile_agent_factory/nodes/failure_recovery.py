@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from agile_agent_factory.tools.logger import log
-from agile_agent_factory.tools.path_utils import normalize_generated_path
+from agile_agent_factory.tools.path_utils import normalize_generated_path, resolve_namespace_collision
 
 # Matches app/ or tests/ paths in pytest tracebacks
 _PATH_RE = re.compile(r"\b((?:app|tests)/[\w/]+\.py)\b")
@@ -131,6 +131,13 @@ def _scaffold_missing_module(output: str) -> list[str]:
                 init_target = normalize_generated_path(init_path)
                 if not init_target.exists():
                     init_target.parent.mkdir(parents=True, exist_ok=True)
+                    # Never shadow a real module with an empty stub package
+                    shadow = init_target.parent.parent / (init_target.parent.name + ".py")
+                    if shadow.exists() and shadow.read_text().strip():
+                        log(f"Scaffold: skipping {init_path} — would shadow existing real module {shadow.name}")
+                        continue
+                    if not resolve_namespace_collision(init_target):
+                        continue
                     init_target.write_text("")
                     log(f"Scaffolded __init__.py: {init_path}")
                     scaffolded.append(init_path)
@@ -143,6 +150,8 @@ def _scaffold_missing_module(output: str) -> list[str]:
             target = normalize_generated_path(file_path)
             if not target.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
+                if not resolve_namespace_collision(target):
+                    continue
                 target.write_text("")
                 log(f"Scaffolded empty module: {file_path}")
                 scaffolded.append(file_path)
