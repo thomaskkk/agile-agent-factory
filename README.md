@@ -173,6 +173,10 @@ The pipeline uses LangGraph `interrupt()` / `Command(resume=feedback)` for HITL:
        │                                                  Jira flag + @mention
        │                                                  re-run to resume
        │
+       ├─▶ code review retries exhausted ───────────▶ interrupt("intervention")
+       │                                                  Jira flag + @mention
+       │                                                  re-run to resume
+       │
        └─▶ LLM quota exceeded ──────────────────────▶ interrupt("quota")
                                                         Jira flag + @mention
                                                         resolve quota, clear flag,
@@ -188,4 +192,4 @@ cd agile-agent-factory
 uv run pytest tests/ -v
 ```
 
-255 tests covering `config` (7), `workflow` (2), `jira_facade` (5), `llm_adapters` (10), `agent_contract` (2), `path_utils` (10), `llm_client` (27), `jira_client` (17), `pytest_runner` (8), `po_agent` (7), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (9), `failure_recovery` (16), `review_node` (14), `test_node` (7), `dev_node` (7), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (19), `dispatcher` (18), and `graph` (28).
+321 tests covering `config` (7), `workflow` (2), `jira_facade` (5), `llm_adapters` (10), `agent_contract` (2), `path_utils` (13), `llm_client` (27), `jira_client` (17), `pytest_runner` (7), `po_agent` (10), `tl_agent` (8), `qa_agent` (4), `ux_agent` (7), `reviewer_agent` (17), `failure_recovery` (35), `review_node` (25), `test_node` (13), `dev_node` (18), `dependencies` (6), `aider_client` (5), `readme_agent` (2), `ready_contract` (18), `dispatcher` (22), and `graph` (41).

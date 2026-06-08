@@ -77,6 +77,7 @@ All HITL flows use `interrupt()` / `Command(resume=feedback)`:
 
 - **Ambiguity** (`refinement`): PO detects ambiguity → flags Jira issue → `interrupt()`. Human adds clarifying comment. On `main.py` re-run, Jira flag is cleared, comment fetched, and `Command(resume=feedback)` re-runs PO with `hitl_feedback` injected into the prompt.
 - **Dev intervention** (`intervention`): pytest retries exhausted → flags Jira story → `interrupt()`. Human fixes code or leaves feedback. On resume, pytest runs first; if already passing, LLM generation is skipped.
+- **Review exhaustion** (`intervention`): code review retries (`MAX_REVIEW_RETRIES`) exhausted (either pre-gate or LLM verdict) → flags Jira story → `interrupt()`. Human resolves. On resume, `review_retries` resets to 0 and a fresh review cycle begins.
 - **Quota** (`quota`): either LLM provider rate-limited → flags Jira issue → `interrupt()`. Resolve quota, clear flag, re-run `main.py`.
 
 ## Path safety
@@ -99,31 +100,31 @@ Never bypass this function when writing files from LLM output.
 
 ## Testing
 
-Factory tests live in `agile-agent-factory/tests/`. They cover (255 tests total):
+Factory tests live in `agile-agent-factory/tests/`. They cover (321 tests total):
 - `config` — 7 tests (WIP_LIMITS env override + defaults, reviewer/readme budget constants, MAX_STRATEGY_RETRIES, ASSUMPTION_RISK_THRESHOLD)
 - `workflow` — 2 tests (WorkflowState enum values, uniqueness)
 - `jira_facade` — 5 tests (advance/move_all delegation, error swallowing, flag_for_human, post_section)
 - `llm_adapters` — 10 tests (per-agent prompt builders include their inputs)
 - `agent_contract` — 2 tests (AgentResult defaults, payload/errors)
-- `path_utils` — 10 tests (path normalization and traversal rejection)
+- `path_utils` — 13 tests (path normalization and traversal rejection)
 - `llm_client` — 27 tests (mocked Anthropic + OpenAI, JSON parsing, quota propagation, exponential backoff retry, LLMTransientError separate from quota, comma-chain model fallback)
 - `jira_client` — 17 tests (mocked HTTP via `responses` library, subtask type discovery, `append_adf_doc`, `update_issue_description`, DRY_RUN-early skip)
-- `pytest_runner` — 8 tests (PYTHONPATH injection, exit codes, `--with` extra-package flags, `test_targets` overrides full-suite default)
-- `po_agent` — 7 tests (idempotency guard, issue creation, hitl_feedback injection, non-critical assumption ledger, must-escalate hitl_required, risk score computation)
+- `pytest_runner` — 7 tests (PYTHONPATH injection, exit codes, `--with` extra-package flags, `test_targets` overrides full-suite default)
+- `po_agent` — 10 tests (idempotency guard, issue creation, hitl_feedback injection, non-critical assumption ledger, must-escalate hitl_required, risk score computation)
 - `tl_agent` — 8 tests (architecture caching on resume, subtask idempotency, fresh LLM call + persistence, write-scope guard)
 - `qa_agent` — 4 tests
 - `ux_agent` — 7 tests (validated spec, Jira description append, quota propagation, unknown ui_type/technology rejection)
-- `reviewer_agent` — 9 tests
-- `failure_recovery` — 16 tests (files_from_traceback ordering/dedup/stdlib-filtering, classify_failure per class, _scaffold_missing_module creates stubs/skips non-app)
-- `review_node` — 14 tests (layer-1 out-of-scope filter, layer-2 vagueness filter, _filter_rejection combined, rework prompt includes write_scope)
-- `test_node` — 7 tests (missing_dependency/module mechanical recovery, targeted+full two-stage routing, quarantine of cross-story regression, truncated correction uses strategy budget, reasoning exhaustion fires HITL)
-- `dev_node` — 7 tests (namespace collision detection, _correct_code puts traceback file first, returns status tuple, empty-on-bad-json)
+- `reviewer_agent` — 17 tests
+- `failure_recovery` — 35 tests (files_from_traceback ordering/dedup/stdlib-filtering, classify_failure per class, _scaffold_missing_module creates stubs/skips non-app)
+- `review_node` — 25 tests (layer-1 out-of-scope filter, layer-2 vagueness filter, _filter_rejection combined, rework prompt includes write_scope, pre-review gate, review exhaustion HITL)
+- `test_node` — 13 tests (missing_dependency/module mechanical recovery, targeted+full two-stage routing, quarantine of cross-story regression, truncated correction uses strategy budget, reasoning exhaustion fires HITL)
+- `dev_node` — 18 tests (namespace collision detection, _correct_code puts traceback file first, returns status tuple, empty-on-bad-json)
 - `dependencies` — 6 tests (import scan, package aliases, unparseable file skip, 3-signal union, Flask recovery)
 - `aider_client` — 5 tests (is_available guards, subprocess args, failure exit code)
 - `readme_agent` — 2 tests
-- `ready_contract` — 19 tests (contract validation, readiness repair, test_contract extraction, per-class routing: summary→QA, user-intent→QA, UI-flow→UX, unsafe-interfaces→HITL, open_questions→QA)
-- `dispatcher` — 18 tests (RTL priority, WIP limits, refinement sub-phases, gate routing, active_story_key, code_review rework routing)
-- `graph` — 28 tests (graph compilation, node behavior, routing, state reducer, HITL scenarios, review HITL exhaustion, dev rework path)
+- `ready_contract` — 18 tests (contract validation, readiness repair, test_contract extraction, per-class routing: summary→QA, user-intent→QA, UI-flow→UX, unsafe-interfaces→HITL, open_questions→QA)
+- `dispatcher` — 22 tests (RTL priority, WIP limits, refinement sub-phases, gate routing, active_story_key, code_review rework routing)
+- `graph` — 41 tests (graph compilation, node behavior, routing, state reducer, HITL scenarios, review HITL exhaustion, dev rework path)
 
 PYTHONPATH for product tests is injected by `src/agile_agent_factory/tools/pytest_runner.py` (points to `../`), so `from app.module import ...` resolves correctly from the product root.
 
