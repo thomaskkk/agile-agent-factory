@@ -11,7 +11,7 @@ everything as the stable public surface that graph.py imports.
 
 from __future__ import annotations
 
-from agile_agent_factory.config import PRODUCT_ROOT, WIP_LIMITS, ASSUMPTION_RISK_THRESHOLD
+from agile_agent_factory.config import PRODUCT_ROOT, WIP_LIMITS, ASSUMPTION_RISK_THRESHOLD, MAX_REFINEMENT_RETRIES
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
@@ -235,12 +235,15 @@ def refinement_gate_node(state: PipelineState) -> dict:
     """Advance a story from refinement to tech_design once its ready contract is valid.
 
     This is a zero-LLM deterministic gate after the parallel qa/ux fan-out.
+    Caps retries at MAX_REFINEMENT_RETRIES; exhaustion triggers HITL.
     """
+    from langgraph.types import interrupt
     from agile_agent_factory.agents.ready_contract import (
         build_ready_contract,
         readiness_repair_update,
         validate_ready_contract,
     )
+    from agile_agent_factory.tools.jira_client import make_adf_doc
 
     jira = JiraClient()
     sk, story = _active_story(state)
@@ -258,8 +261,52 @@ def refinement_gate_node(state: PipelineState) -> dict:
     errors = validate_ready_contract(contract)
 
     if errors:
-        log(f"Refinement gate: {sk} not ready; keeping in refinement: {errors}")
-        return {"stories": {sk: {"ready_contract": contract, **readiness_repair_update(errors)}}}
+        refinement_retries = story.get("refinement_retries", 0) + 1
+        log(f"Refinement gate: {sk} not ready (attempt {refinement_retries}/{MAX_REFINEMENT_RETRIES}): {errors}")
+
+        if refinement_retries >= MAX_REFINEMENT_RETRIES:
+            log(f"Refinement retries exhausted for {sk}. Triggering HITL.")
+            try:
+                jira.add_comment_adf(
+                    sk,
+                    make_adf_doc(
+                        f"Refinement gate failed {refinement_retries} times — human review needed.\n\n"
+                        f"Errors: {errors}"
+                    ),
+                )
+                jira.set_flag(sk)
+            except Exception:
+                pass
+            interrupt({
+                "type": "intervention",
+                "blocking_key": sk,
+                "reason": f"Refinement gate exhausted after {refinement_retries} attempts",
+                "errors": errors,
+            })
+            try:
+                jira.clear_flag(sk)
+            except Exception:
+                pass
+            return {
+                "stories": {
+                    sk: {
+                        "ready_contract": contract,
+                        "refinement_retries": 0,
+                        "hitl_type": "intervention",
+                        **readiness_repair_update(errors),
+                    }
+                }
+            }
+
+        return {
+            "stories": {
+                sk: {
+                    "ready_contract": contract,
+                    "refinement_retries": refinement_retries,
+                    **readiness_repair_update(errors),
+                }
+            }
+        }
 
     log(f"Refinement gate: {sk} ready → tech_design.")
     return {
@@ -269,6 +316,7 @@ def refinement_gate_node(state: PipelineState) -> dict:
                 "ready_contract": contract,
                 "ready_validation_errors": [],
                 "ready_validated": True,
+                "refinement_retries": 0,
             }
         }
     }

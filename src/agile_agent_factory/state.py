@@ -45,10 +45,11 @@ class StoryState(TypedDict, total=False):
     retries: int
     correction_failures: int
     last_test_output: str
+    refinement_retries: int  # counts gate failures; HITL at MAX_REFINEMENT_RETRIES
     review_retries: int
     review_rejection_reason: str  # populated by review_node on rejection; cleared on next dev pass
     review_status: str  # "pending_review" | "rework_needed" — only meaningful in code_review column
-    hitl_type: str  # "refinement" | "intervention" | "quota" | None
+    hitl_type: str | None  # "refinement" | "intervention" | "quota" | None
     hitl_feedback: str
     regression_blockers: list  # cross-story test failures quarantined for later resolution
     assumption_ledger: list  # recorded PO assumptions when proceeding under ambiguity

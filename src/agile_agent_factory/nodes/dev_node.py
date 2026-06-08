@@ -90,12 +90,17 @@ Architecture context (read-only — do not re-implement from scratch):
             "Return a JSON list of files to write. Use only paths starting with app/ or tests/. "
             "Never use absolute paths or nested app/app/ paths."
         )
+        scope_instruction = (
+            "\nYou MUST only create or modify files in this write_scope:\n"
+            + "\n".join(f"  - {p}" for p in write_scope)
+            + "\nDo NOT create any files outside this list."
+        ) if write_scope else ""
         prompt = f"""Implement the following blueprint. Return JSON only:
 [
   {{"path": "app/module.py", "content": "# full file content here"}},
   ...
 ]
-
+{scope_instruction}
 Blueprint:
 {blueprint}
 """
@@ -160,7 +165,32 @@ def _parse_correction_response(raw: str) -> list | None:
     return None
 
 
-def _correct_code(blueprint: str, traceback: str, model: str | None = None, write_scope: list[str] | None = None) -> tuple[str, list[str]]:
+def _build_spec_block(test_contract: dict | None, gherkin_criteria: list[str] | None) -> str:
+    """Build a highlighted spec section for the correction prompt."""
+    parts = []
+    if test_contract:
+        funcs = test_contract.get("test_functions") or test_contract.get("expected_tests") or []
+        if funcs:
+            parts.append("Expected test functions:\n" + "\n".join(f"  - {f}" for f in funcs))
+        imports = test_contract.get("target_imports", [])
+        if imports:
+            parts.append("Target imports:\n" + "\n".join(f"  - {i}" for i in imports))
+        edges = test_contract.get("edge_cases", [])
+        if edges:
+            parts.append("Edge cases to handle:\n" + "\n".join(f"  - {e}" for e in edges))
+    if gherkin_criteria:
+        parts.append("Acceptance criteria:\n" + "\n".join(f"  {c}" for c in gherkin_criteria[:3]))
+    return "\n\n".join(parts)
+
+
+def _correct_code(
+    blueprint: str,
+    traceback: str,
+    model: str | None = None,
+    write_scope: list[str] | None = None,
+    test_contract: dict | None = None,
+    gherkin_criteria: list[str] | None = None,
+) -> tuple[str, list[str]]:
     """Ask the LLM to fix failing tests.
 
     Returns (status, written_files):
@@ -203,14 +233,16 @@ def _correct_code(blueprint: str, traceback: str, model: str | None = None, writ
         "Do NOT create requirements.txt, setup.py, setup.cfg, pyproject.toml or other "
         "config/dependency files — dependencies are managed separately."
     )
+    spec_block = _build_spec_block(test_contract, gherkin_criteria)
+    spec_section = f"\nWHAT TO IMPLEMENT (from spec):\n{spec_block}\n" if spec_block else ""
     prompt = f"""[
   {{"path": "app/file_to_fix.py", "content": "FULL CORRECTED CONTENT HERE"}}
 ]
 
 Replace the template above with ONLY the files that must change to fix the failing
 tests below. Do not include unchanged files. Do not add any text before or after the JSON array.
-
-Traceback:
+{spec_section}
+FAILING TESTS:
 {traceback}
 
 Current source files:
@@ -295,10 +327,10 @@ def dev_node(state: PipelineState) -> dict:
     blueprint = _load_dev_context(sk)
     review_feedback = story.get("review_rejection_reason", "")
 
-    # Derive write_scope from test_contract so rework is targeted to owned files
+    # Derive write_scope from test_contract for both initial gen and rework
     tc = story.get("test_contract", {})
     write_scope: list[str] = []
-    if tc and is_rework:
+    if tc:
         if tc.get("test_file"):
             write_scope.append(tc["test_file"])
         for imp in (tc.get("target_imports") or []):

@@ -178,7 +178,10 @@ def test_prg_check1_passes_when_all_files_exist(tmp_path):
 
 
 def test_prg_check2_fails_when_expected_test_missing(tmp_path):
-    """Gate fails when an expected test function is absent from the test file."""
+    """Gate fails when an expected test function is absent from the test file.
+
+    expected_tests comes from ready_contract (normalized), not test_contract (raw QA output).
+    """
     prg = _import_prg()
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
@@ -187,9 +190,11 @@ def test_prg_check2_fails_when_expected_test_missing(tmp_path):
     story = {
         "test_contract": {
             "test_file": "tests/test_auth.py",
-            "expected_tests": ["test_login_valid", "test_login_invalid"],
             "target_imports": [],
-        }
+        },
+        "ready_contract": {
+            "expected_tests": ["test_login_valid", "test_login_invalid"],
+        },
     }
     passed, reason = prg(story, [], tmp_path)
     assert passed is False
@@ -207,13 +212,40 @@ def test_prg_check2_passes_when_all_expected_tests_present(tmp_path):
     story = {
         "test_contract": {
             "test_file": "tests/test_auth.py",
-            "expected_tests": ["test_login_valid", "test_login_invalid"],
             "target_imports": [],
-        }
+        },
+        "ready_contract": {
+            "expected_tests": ["test_login_valid", "test_login_invalid"],
+        },
     }
     passed, reason = prg(story, [], tmp_path)
     assert passed is True
     assert reason == ""
+
+
+def test_prg_check2_uses_ready_contract_not_test_contract(tmp_path):
+    """expected_tests in test_contract alone must NOT trigger the check.
+
+    test_contract (raw QA) uses test_functions; ready_contract (normalized) uses expected_tests.
+    The gate must look at ready_contract so it never silently gets [] from the wrong key.
+    """
+    prg = _import_prg()
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_auth.py").write_text("def test_other(): pass\n")
+    story = {
+        "test_contract": {
+            "test_file": "tests/test_auth.py",
+            "test_functions": ["test_login_valid"],  # raw QA key — should NOT be read here
+            "target_imports": [],
+        },
+        "ready_contract": {
+            "expected_tests": ["test_login_valid"],  # normalized key — MUST be read here
+        },
+    }
+    passed, reason = prg(story, [], tmp_path)
+    assert passed is False, "Gate must detect missing test_login_valid via ready_contract"
+    assert "test_login_valid" in reason
 
 
 def test_prg_check3_fails_when_source_has_syntax_error(tmp_path):
@@ -312,9 +344,11 @@ def test_prg_all_checks_pass(tmp_path):
     story = {
         "test_contract": {
             "test_file": "tests/test_mod.py",
-            "expected_tests": ["test_do_thing"],
             "target_imports": ["from app.mod import do_thing"],
-        }
+        },
+        "ready_contract": {
+            "expected_tests": ["test_do_thing"],
+        },
     }
     write_scope = ["app/mod.py", "tests/test_mod.py"]
     with patch(

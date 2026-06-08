@@ -344,3 +344,39 @@ def test_refinement_gate_ready_and_ux_pending_reduce_qa_slots():
     result = dispatch_stories(state)
     qa_sends = [s for s in result if s.node == "qa"]
     assert len(qa_sends) == 0  # all 2 slots consumed by gate_ready(1) + ux_pending(1)
+
+
+# ---------------------------------------------------------------------------
+# HITL exclusion / re-inclusion (Fix #1)
+# ---------------------------------------------------------------------------
+
+def test_story_with_hitl_type_is_excluded_from_dispatch():
+    """A story paused for HITL must NOT be dispatched."""
+    from unittest.mock import patch
+
+    state = _make_state({"F1-1": {"story_key": "F1-1", "column": "development", "hitl_type": "intervention"}})
+    # Dispatcher calls interrupt() when all stories are blocked — mock it to avoid context error
+    with patch("langgraph.types.interrupt"):
+        result = dispatch_stories(state)
+    # No dev sends — story is excluded because hitl_type is truthy
+    assert isinstance(result, list)
+    dev_sends = [s for s in result if s.node == "dev"]
+    assert len(dev_sends) == 0
+
+
+def test_story_with_hitl_type_none_is_dispatchable():
+    """A story whose hitl_type is cleared to None must be dispatched normally."""
+    state = _make_state({"F1-1": {"story_key": "F1-1", "column": "development", "hitl_type": None}})
+    result = dispatch_stories(state)
+    assert isinstance(result, list)
+    dev_sends = [s for s in result if s.node == "dev"]
+    assert len(dev_sends) == 1
+
+
+def test_story_without_hitl_type_is_dispatchable():
+    """A story with no hitl_type key at all must be dispatched normally."""
+    state = _make_state({"F1-1": {"story_key": "F1-1", "column": "development"}})
+    result = dispatch_stories(state)
+    assert isinstance(result, list)
+    dev_sends = [s for s in result if s.node == "dev"]
+    assert len(dev_sends) == 1

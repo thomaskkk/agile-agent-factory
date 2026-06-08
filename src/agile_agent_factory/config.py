@@ -65,6 +65,7 @@ README_MODEL = os.environ.get("README_MODEL", "")
 
 MAX_RETRIES_DEV = int(os.environ.get("MAX_RETRIES_DEV", "2"))
 MAX_REVIEW_RETRIES = int(os.environ.get("MAX_REVIEW_RETRIES", "2"))
+MAX_REFINEMENT_RETRIES = int(os.environ.get("MAX_REFINEMENT_RETRIES", "3"))
 MAX_CORRECTION_FAILURES = int(os.environ.get("MAX_CORRECTION_FAILURES", "2"))
 # Separate budget for mechanical/strategy retries (dep re-resolution, stub scaffolding,
 # truncation retries) — these don't count toward MAX_RETRIES_DEV.
