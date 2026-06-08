@@ -170,11 +170,30 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
                 jira.clear_flag(blocking_key)
             except Exception:
                 pass
-        # Clear hitl_type so dispatcher sees the story as dispatchable again
+        # Clear hitl_type and reset review_retries so the dispatcher re-enters the node
+        # fresh with a full retry budget (the node is re-entered from scratch on Send()-resume,
+        # so the return value inside the HITL path never updates the checkpoint).
         if blocking_key:
-            graph.update_state(config, {"stories": {blocking_key: {"hitl_type": None}}})
+            graph.update_state(config, {"stories": {blocking_key: {"hitl_type": None, "review_retries": 0}}})
         log(f"Flag cleared. Human feedback: {feedback[:200]}")
         graph.invoke(Command(resume=feedback), config)
+        return
+
+    if interrupt_type == "blocked":
+        # Dispatcher fires this when all dispatchable stories are blocked on HITL.
+        # Check each blocked story: if its Jira flag is cleared, unblock it.
+        blocked_stories = info.get("blocked_stories", [])
+        cleared = {
+            sk: {"hitl_type": None, "review_retries": 0}
+            for sk in blocked_stories
+            if sk and not jira.is_flagged(sk)
+        }
+        if not cleared:
+            log(f"All {len(blocked_stories)} blocked story/stories still flagged. Awaiting human resolution.")
+            return
+        graph.update_state(config, {"stories": cleared})
+        log(f"Unblocked {len(cleared)} story/stories (flag cleared by human).")
+        graph.invoke(Command(resume=""), config)
         return
 
     log(f"Unknown interrupt type '{interrupt_type}'. Resuming with empty feedback.")

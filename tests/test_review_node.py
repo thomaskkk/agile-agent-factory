@@ -447,3 +447,55 @@ def test_review_node_calls_review_patch_when_gate_passes():
 
     mock_review.assert_called_once()
     assert result.get("review_approved") is True
+
+
+# ---------------------------------------------------------------------------
+# HITL exhaustion path: flag must persist, no clear_flag in-process
+# ---------------------------------------------------------------------------
+
+def test_review_node_hitl_exhaustion_does_not_clear_flag():
+    """review_node must NOT call clear_flag after set_flag during HITL exhaustion.
+
+    The flag must persist so the human can see it and so main.py's is_flagged
+    guard works correctly before resuming.
+    """
+    rn = _import_rn()
+    from agile_agent_factory.config import MAX_REVIEW_RETRIES
+
+    state = _make_review_state(extra_story={"review_retries": MAX_REVIEW_RETRIES - 1})
+
+    with (
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing files")),
+        patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
+        patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
+        patch("langgraph.types.interrupt"),
+    ):
+        mock_jira_inst = MagicMock()
+        MockJira.return_value = mock_jira_inst
+        rn.review_node(state)
+
+    mock_jira_inst.set_flag.assert_called_once()
+    mock_jira_inst.clear_flag.assert_not_called()
+
+
+def test_review_node_hitl_exhaustion_return_does_not_reset_review_retries():
+    """The HITL exhaustion return value no longer contains review_retries.
+
+    For Send()-dispatched nodes the return after interrupt() is dead code on
+    cross-process resume; main.py resets review_retries via update_state instead.
+    """
+    rn = _import_rn()
+    from agile_agent_factory.config import MAX_REVIEW_RETRIES
+
+    state = _make_review_state(extra_story={"review_retries": MAX_REVIEW_RETRIES - 1})
+
+    with (
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing files")),
+        patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
+        patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
+        patch("langgraph.types.interrupt"),
+    ):
+        MockJira.return_value = MagicMock()
+        result = rn.review_node(state)
+
+    assert "review_retries" not in result

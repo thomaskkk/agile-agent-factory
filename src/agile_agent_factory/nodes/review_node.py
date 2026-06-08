@@ -213,14 +213,13 @@ def review_node(state: PipelineState) -> dict:
             jira.add_comment_adf(sk, make_adf_doc(summary))
             jira.set_flag(sk)
             interrupt({"type": "intervention", "blocking_key": sk})
-            try:
-                jira.clear_flag(sk)
-            except Exception:
-                pass
+            # Flag is NOT cleared here — it must persist for the human and for main.py's
+            # is_flagged guard. main.py clears it when handling the intervention resume.
+            # The return below is dead code for Send()-dispatched nodes (the node is
+            # re-entered from scratch on resume); main.py resets review_retries via update_state.
             return {
                 "review_approved": False,
-                "review_retries": 0,
-                "stories": {sk: {"review_retries": 0, "review_status": "pending_review", "hitl_type": "review_exhaustion"}},
+                "stories": {sk: {"review_status": "pending_review"}},
             }
         cycle = review_retries
         log(f"Review pre-gate failed for {sk} (retry {cycle}/{MAX_REVIEW_RETRIES}). Keeping in code_review for rework.")
