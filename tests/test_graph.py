@@ -1005,3 +1005,73 @@ def test_raise_quota_interrupt_no_hitl_type_for_non_story_key():
 
     # No stories entry for the unknown key
     assert "stories" not in patch_dict or "F1-0" not in patch_dict.get("stories", {})
+
+
+# ---------------------------------------------------------------------------
+# Fix #3: quota resume resets quota_autonomous_retries (main.py _handle_resume)
+# ---------------------------------------------------------------------------
+
+def test_handle_resume_quota_resets_autonomous_retries():
+    """After quota HITL is resolved, _handle_resume must reset quota_autonomous_retries to 0."""
+    import sys
+    import types
+    import importlib
+
+    # Build a minimal fake snapshot with quota interrupt
+    fake_task = MagicMock()
+    fake_task.interrupts = [MagicMock(value={"type": "quota", "blocking_key": "F1-1"})]
+    fake_snapshot = MagicMock()
+    fake_snapshot.tasks = [fake_task]
+
+    update_calls = []
+
+    fake_graph = MagicMock()
+    fake_graph.update_state.side_effect = lambda cfg, patch: update_calls.append(patch)
+
+    fake_jira = MagicMock()
+    fake_jira.is_flagged.return_value = False  # quota resolved
+
+    with (
+        patch("agile_agent_factory.tools.jira_client.JiraClient", return_value=fake_jira),
+        patch("langgraph.types.Command"),
+    ):
+        # Import main and call _handle_resume directly
+        import main as main_mod
+        main_mod._handle_resume(fake_graph, {"configurable": {"thread_id": "test"}}, fake_snapshot)
+
+    # update_state must have been called with quota_autonomous_retries=0
+    assert update_calls, "_handle_resume must call graph.update_state before invoking"
+    first_patch = update_calls[0]
+    assert first_patch.get("quota_autonomous_retries") == 0, (
+        "quota resume must reset quota_autonomous_retries to 0"
+    )
+
+
+def test_handle_resume_intervention_clears_hitl_type():
+    """After intervention HITL is resolved, _handle_resume must clear hitl_type to None."""
+    import main as main_mod
+
+    fake_task = MagicMock()
+    fake_task.interrupts = [MagicMock(value={"type": "intervention", "blocking_key": "F1-2"})]
+    fake_snapshot = MagicMock()
+    fake_snapshot.tasks = [fake_task]
+
+    update_calls = []
+    fake_graph = MagicMock()
+    fake_graph.update_state.side_effect = lambda cfg, patch: update_calls.append(patch)
+
+    fake_jira = MagicMock()
+    fake_jira.is_flagged.return_value = False
+    fake_jira.get_last_comment_text.return_value = "please fix this"
+
+    with (
+        patch("agile_agent_factory.tools.jira_client.JiraClient", return_value=fake_jira),
+        patch("langgraph.types.Command"),
+    ):
+        main_mod._handle_resume(fake_graph, {"configurable": {"thread_id": "test"}}, fake_snapshot)
+
+    assert update_calls, "_handle_resume must call graph.update_state for intervention"
+    stories_patch = update_calls[0].get("stories", {})
+    assert stories_patch.get("F1-2", {}).get("hitl_type") is None, (
+        "intervention resume must clear hitl_type to None"
+    )

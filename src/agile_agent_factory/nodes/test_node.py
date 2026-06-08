@@ -193,7 +193,9 @@ def test_node(state: PipelineState) -> dict:
                 log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
                 try:
                     correction_status, corrected = _correct_code(
-                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None
+                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None,
+                        test_contract=story.get("test_contract"),
+                        gherkin_criteria=story.get("gherkin_criteria"),
                     )
                 except LLMQuotaExceeded as e:
                     patch = raise_quota_interrupt(jira, sk, e, state=state)
@@ -234,7 +236,11 @@ def test_node(state: PipelineState) -> dict:
 
         log("Requesting LLM-driven correction.")
         try:
-            correction_status, corrected = _correct_code(blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None)
+            correction_status, corrected = _correct_code(
+                blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None,
+                test_contract=story.get("test_contract"),
+                gherkin_criteria=story.get("gherkin_criteria"),
+            )
         except LLMQuotaExceeded as e:
             patch = raise_quota_interrupt(jira, sk, e, state=state)
             if patch:

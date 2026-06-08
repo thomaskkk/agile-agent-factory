@@ -8,6 +8,17 @@ from agile_agent_factory.tools.workflow import WorkflowState
 _QA_FALLBACK = {"acceptance_criteria": [], "test_contract": {}}
 
 
+def _adf_to_text(adf: dict | None) -> str:
+    """Recursively extract plain text from a Jira ADF document node."""
+    if not adf or not isinstance(adf, dict):
+        return ""
+    if adf.get("type") == "text":
+        return adf.get("text", "")
+    return " ".join(
+        _adf_to_text(child) for child in (adf.get("content") or [])
+    ).strip()
+
+
 def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentResult:
     """Return an AgentResult whose payload carries gherkin_criteria + test_contracts."""
     all_criteria: dict[str, list[str]] = {}
@@ -19,7 +30,8 @@ def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentRes
         existing_description = issue["fields"].get("description") or {}
         log(f"Generating Gherkin criteria for {story_key}: {summary}")
 
-        result = generate_criteria(summary, "", _QA_FALLBACK)
+        description_text = _adf_to_text(existing_description)
+        result = generate_criteria(summary, description_text, _QA_FALLBACK)
         criteria = result.get("acceptance_criteria", [])
         test_contract = result.get("test_contract") or {}
 

@@ -151,6 +151,11 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
             log(f"{blocking_key} is still flagged. Quota not yet resolved.")
             return
         log("Quota flag cleared. Resuming pipeline.")
+        # Reset autonomous retry counter and clear hitl_type so the story re-enters dispatch
+        graph.update_state(config, {
+            "quota_autonomous_retries": 0,
+            "stories": {blocking_key: {"hitl_type": None}} if blocking_key else {},
+        })
         graph.invoke(Command(resume="quota_resolved"), config)
         return
 
@@ -165,6 +170,9 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
                 jira.clear_flag(blocking_key)
             except Exception:
                 pass
+        # Clear hitl_type so dispatcher sees the story as dispatchable again
+        if blocking_key:
+            graph.update_state(config, {"stories": {blocking_key: {"hitl_type": None}}})
         log(f"Flag cleared. Human feedback: {feedback[:200]}")
         graph.invoke(Command(resume=feedback), config)
         return

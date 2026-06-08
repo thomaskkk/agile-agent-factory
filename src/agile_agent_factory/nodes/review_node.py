@@ -112,7 +112,8 @@ def _pre_review_gate(
             return False, f"Missing required files: {missing}"
 
     # --- Check 2: Test function presence ---
-    expected_tests: list[str] = tc.get("expected_tests", []) or []
+    rc = story.get("ready_contract", {}) or {}
+    expected_tests: list[str] = rc.get("expected_tests", []) or []
     if expected_tests:
         if test_file_path and test_file_path.exists():
             try:

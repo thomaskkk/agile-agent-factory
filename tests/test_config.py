@@ -52,6 +52,21 @@ def test_assumption_risk_threshold_default():
     assert config.ASSUMPTION_RISK_THRESHOLD == 0.7
 
 
+def test_max_refinement_retries_default():
+    import agile_agent_factory.config as config
+    assert config.MAX_REFINEMENT_RETRIES == 3
+
+
+def test_max_refinement_retries_env_override(monkeypatch):
+    import importlib
+    monkeypatch.setenv("MAX_REFINEMENT_RETRIES", "5")
+    import agile_agent_factory.config as config
+    importlib.reload(config)
+    assert config.MAX_REFINEMENT_RETRIES == 5
+    monkeypatch.delenv("MAX_REFINEMENT_RETRIES")
+    importlib.reload(config)
+
+
 def test_model_chain_single_value_is_single_string():
     """Single-value model names (no comma) remain usable as single strings."""
     import agile_agent_factory.config as config

@@ -352,3 +352,135 @@ def test_write_scope_derivation_ignores_non_app_imports():
     ])
 
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Fix #7: write_scope derived on non-rework (initial generation) path
+# ---------------------------------------------------------------------------
+
+def test_write_scope_derived_on_initial_gen_not_only_rework(tmp_path, monkeypatch):
+    """write_scope must be derived from test_contract even when is_rework=False."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch, MagicMock
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "tests").mkdir()
+
+    captured_scope = {}
+
+    def fake_generate(blueprint, review_feedback="", write_scope=None, model=None):
+        captured_scope["write_scope"] = write_scope
+
+    dn = _mod()
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "development",  # initial gen, not rework
+                "test_contract": {
+                    "test_file": "tests/test_auth.py",
+                    "target_imports": ["from app.auth import login"],
+                },
+            }
+        },
+        "epic_keys": [],
+    }
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="some blueprint"),
+        patch.object(dn, "_generate_code_with_llm", side_effect=fake_generate),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node._safe_transition", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path),
+    ):
+        dn.dev_node(state)
+
+    scope = captured_scope.get("write_scope") or []
+    assert "tests/test_auth.py" in scope, "test_file must be in write_scope for initial gen"
+    assert "app/auth.py" in scope, "module from target_imports must be in write_scope for initial gen"
+
+
+def test_initial_gen_prompt_includes_write_scope_paths():
+    """_generate_code_with_llm initial gen branch must include write_scope paths in the prompt."""
+    from unittest.mock import patch
+
+    dn = _mod()
+    captured = {}
+
+    def fake_call_llm_json(prompt, system="", fallback=None, model=None, prefill=""):
+        captured["prompt"] = prompt
+        return []
+
+    write_scope = ["tests/test_auth.py", "app/auth.py"]
+    with patch("agile_agent_factory.nodes.dev_node.call_llm_json", side_effect=fake_call_llm_json):
+        dn._generate_code_with_llm(
+            blueprint="Build auth module",
+            review_feedback="",  # initial gen path
+            write_scope=write_scope,
+            model=None,
+        )
+
+    prompt = captured.get("prompt", "")
+    assert "tests/test_auth.py" in prompt, "write_scope paths must appear in initial gen prompt"
+    assert "app/auth.py" in prompt, "write_scope paths must appear in initial gen prompt"
+
+
+# ---------------------------------------------------------------------------
+# Fix #5: correction prompt includes spec block
+# ---------------------------------------------------------------------------
+
+def test_correct_code_prompt_includes_test_contract_functions(tmp_path, monkeypatch):
+    """Correction prompt must include expected test function names from test_contract."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "auth.py").write_text("x = 1")
+
+    captured_prompt = {}
+
+    def fake_call_llm(prompt, system="", model=None, prefill=""):
+        captured_prompt["val"] = prompt
+        return "[]"
+
+    test_contract = {
+        "test_functions": ["test_login_valid", "test_login_invalid"],
+        "target_imports": ["from app.auth import login"],
+    }
+
+    with patch("agile_agent_factory.nodes.dev_node.call_llm", side_effect=fake_call_llm), \
+         patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path):
+        _mod()._correct_code(
+            "blueprint",
+            "AssertionError: test_login_valid failed",
+            test_contract=test_contract,
+        )
+
+    prompt = captured_prompt.get("val", "")
+    assert "test_login_valid" in prompt, "correction prompt must include expected test functions"
+    assert "test_login_invalid" in prompt, "correction prompt must include expected test functions"
+
+
+def test_correct_code_prompt_valid_without_test_contract(tmp_path, monkeypatch):
+    """Correction call with no test_contract must still produce a valid prompt (spec block omitted)."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "x.py").write_text("x = 1")
+
+    def fake_call_llm(prompt, system="", model=None, prefill=""):
+        return '[{"path": "app/x.py", "content": "x = 2"}]'
+
+    with patch("agile_agent_factory.nodes.dev_node.call_llm", side_effect=fake_call_llm), \
+         patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path):
+        status, written = _mod()._correct_code("blueprint", "AssertionError", test_contract=None)
+
+    assert status == "ok"
+    assert written  # files were written normally
