@@ -142,6 +142,33 @@ def test_correct_code_returns_empty_on_bad_json(tmp_path, monkeypatch):
     assert written == []
 
 
+def test_correct_code_includes_write_scope_in_system_prompt(tmp_path, monkeypatch):
+    """write_scope must appear in the LLM system prompt so the model doesn't generate out-of-scope files."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "config.py").write_text("# config")
+
+    captured_system = {}
+
+    def fake_call_llm(prompt, system="", model=None, prefill=""):
+        captured_system["val"] = system
+        return "[]"
+
+    scope = ["tests/test_app_skeleton.py", "app/config.py", "app/extensions.py"]
+
+    with patch("agile_agent_factory.nodes.dev_node.call_llm", side_effect=fake_call_llm), \
+         patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path):
+        _mod()._correct_code("blueprint", "AssertionError", write_scope=scope)
+
+    system = captured_system.get("val", "")
+    assert "tests/test_app_skeleton.py" in system
+    assert "app/config.py" in system
+    assert "app/extensions.py" in system
+
+
 # ---------------------------------------------------------------------------
 # _write_generated_files: write_scope enforcement (Milestone 2)
 # ---------------------------------------------------------------------------

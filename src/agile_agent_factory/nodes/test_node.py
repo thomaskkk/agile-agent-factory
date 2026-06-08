@@ -191,9 +191,10 @@ def test_node(state: PipelineState) -> dict:
             if strategy_retries < MAX_STRATEGY_RETRIES:
                 hint = _failure_hint(failure_class)
                 log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
+                correction_scope = _augment_scope_for_conftest(write_scope, failure_class, output)
                 try:
                     correction_status, corrected = _correct_code(
-                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=write_scope or None,
+                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=correction_scope or None,
                         test_contract=story.get("test_contract"),
                         gherkin_criteria=story.get("gherkin_criteria"),
                     )
@@ -235,9 +236,10 @@ def test_node(state: PipelineState) -> dict:
             return {"stories": {sk: {"hitl_type": "intervention"}}}
 
         log("Requesting LLM-driven correction.")
+        correction_scope = _augment_scope_for_conftest(write_scope, failure_class, output)
         try:
             correction_status, corrected = _correct_code(
-                blueprint, output, model=TEST_MODEL or None, write_scope=write_scope or None,
+                blueprint, output, model=TEST_MODEL or None, write_scope=correction_scope or None,
                 test_contract=story.get("test_contract"),
                 gherkin_criteria=story.get("gherkin_criteria"),
             )
@@ -325,3 +327,20 @@ def _failure_hint(failure_class: str) -> str:
         ),
     }
     return hints.get(failure_class, "")
+
+
+def _augment_scope_for_conftest(
+    write_scope: list[str], failure_class: str, output: str
+) -> list[str]:
+    """Return write_scope extended with tests/conftest.py when the failure involves conftest.
+
+    conftest.py is only added when the failure explicitly implicates it — either the
+    failure class is fixture_not_found, or the pytest output mentions conftest.py.
+    This prevents unrelated stories from accidentally overwriting shared fixtures.
+    """
+    conftest = "tests/conftest.py"
+    if conftest in write_scope:
+        return write_scope
+    if failure_class == "fixture_not_found" or conftest in output:
+        return list(write_scope) + [conftest]
+    return write_scope

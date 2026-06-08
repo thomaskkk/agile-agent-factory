@@ -332,6 +332,30 @@ def test_prg_check4_passes_when_pytest_passes(tmp_path):
     assert reason == ""
 
 
+def test_prg_check4_passes_extra_packages_to_run_pytest(tmp_path):
+    """Gate check 4 forwards extra_packages to run_pytest so deps like flask are available."""
+    prg = _import_prg()
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_foo.py").write_text("def test_pass(): pass\n")
+    story = {
+        "test_contract": {
+            "test_file": "tests/test_foo.py",
+            "expected_tests": [],
+            "target_imports": [],
+        }
+    }
+    with patch(
+        "agile_agent_factory.tools.pytest_runner.run_pytest",
+        return_value=(0, "1 passed"),
+    ) as mock_run:
+        passed, reason = prg(story, [], tmp_path, extra_packages=["flask", "sqlalchemy"])
+    assert passed is True
+    mock_run.assert_called_once()
+    call_args = mock_run.call_args
+    assert call_args[0][0] == ["flask", "sqlalchemy"]
+
+
 def test_prg_all_checks_pass(tmp_path):
     """Gate returns (True, '') when all 4 checks pass."""
     prg = _import_prg()

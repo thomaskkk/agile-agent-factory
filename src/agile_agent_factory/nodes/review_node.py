@@ -90,6 +90,7 @@ def _pre_review_gate(
     story: dict,
     write_scope: list[str],
     product_root: Path,
+    extra_packages: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Deterministic structural checks run before the LLM reviewer.
 
@@ -154,7 +155,7 @@ def _pre_review_gate(
     if test_file_rel:
         if test_file_path.exists():
             try:
-                exit_code, output = run_pytest([], test_targets=[str(test_file_path)])
+                exit_code, output = run_pytest(extra_packages or [], test_targets=[str(test_file_path)])
             except Exception:
                 exit_code, output = 0, ""  # can't verify; proceed to LLM reviewer
             # Exit code 5 means "no tests collected" — treat as pass
@@ -196,7 +197,10 @@ def review_node(state: PipelineState) -> dict:
 
     # Milestone 3: deterministic pre-gate — catches structural failures before LLM review
     from agile_agent_factory.config import PRODUCT_ROOT as _PRODUCT_ROOT
-    gate_passed, gate_reason = _pre_review_gate(story, write_scope, _PRODUCT_ROOT)
+    from agile_agent_factory.tools.dependencies import resolve_dependencies
+    from agile_agent_factory.nodes.helpers import _to_legacy_state
+    deps = resolve_dependencies(_to_legacy_state(state, sk), _PRODUCT_ROOT)
+    gate_passed, gate_reason = _pre_review_gate(story, write_scope, _PRODUCT_ROOT, extra_packages=deps)
     if not gate_passed:
         log(f"Review: pre-gate failed for {sk}: {gate_reason}")
         review_retries += 1

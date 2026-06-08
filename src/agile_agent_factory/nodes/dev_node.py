@@ -222,6 +222,13 @@ def _correct_code(
     ][:rest_budget]
     files_block = "\n\n".join(priority_fences + rest_fences)
 
+    scope_clause = ""
+    if write_scope:
+        scope_clause = (
+            f" You MUST only modify files in this write scope: {', '.join(write_scope)}."
+            " Do NOT touch any other file, even if you think it would help."
+        )
+
     system = (
         "You are a Python developer fixing a failing test suite. "
         "Your ENTIRE response must be ONLY a valid JSON array — "
@@ -231,7 +238,7 @@ def _correct_code(
         "that are already correct. Return the full content of each file you do change. "
         "Use only paths starting with app/ or tests/. "
         "Do NOT create requirements.txt, setup.py, setup.cfg, pyproject.toml or other "
-        "config/dependency files — dependencies are managed separately."
+        f"config/dependency files — dependencies are managed separately.{scope_clause}"
     )
     spec_block = _build_spec_block(test_contract, gherkin_criteria)
     spec_section = f"\nWHAT TO IMPLEMENT (from spec):\n{spec_block}\n" if spec_block else ""
