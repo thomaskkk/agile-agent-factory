@@ -30,7 +30,7 @@ def main() -> None:
     parser.add_argument(
         "--reset-state",
         action="store_true",
-        help="Delete checkpoint database and exit (does not touch ../app/ or ../tests/)",
+        help="Delete checkpoint database and exit (does not touch repo-root app/ or tests/)",
     )
     args = parser.parse_args()
 
@@ -66,7 +66,7 @@ def main() -> None:
     _handle_quota_backoff(graph, config, snapshot)
 
     # Fresh start or crash recovery — invoke the graph
-    log("Reading business idea from ../business_idea.md.")
+    log("Reading business idea from repo-root business_idea.md.")
     _invoke_graph(graph, {}, config)
 
 

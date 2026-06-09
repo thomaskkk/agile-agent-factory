@@ -50,7 +50,7 @@ Return JSON only:
     {{"title": "Implement X", "story_key": "<key>", "description": "details"}}
   ],
   "import_rules": "...",
-  "test_command": "uv run pytest ../tests/ -v"
+  "test_command": "uv run pytest tests/ -v"
 }}
 
 Story keys: {story_keys}

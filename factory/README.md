@@ -5,7 +5,7 @@ An autonomous "Dark Factory" software development pipeline. Given a business ide
 ## How it works
 
 ```
-../business_idea.md
+business_idea.md
         │
         ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -37,54 +37,27 @@ An autonomous "Dark Factory" software development pipeline. Given a business ide
 
 ## Directory layout
 
-```
-agile-agent-factory/        ← this repo (the factory)
-├── main.py                 ← entry point: LangGraph compile/resume, HITL Command(resume=) dispatch
-├── pyproject.toml          ← hatchling src layout; pytest pythonpath = ["src"]
-├── blueprint/              ← layered handoff blueprint (generated; gitignored)
-│   ├── context/            ← business_intent.md, ux_decisions.md, qa_criteria/<story>.md
-│   ├── architecture/       ← decisions.md, constraints.md
-│   └── tasks/              ← per-story task files (<story_key>.md)
-├── src/
-│   └── agile_agent_factory/
-│       ├── config.py       ← env var loader + PRODUCT_ROOT, CHECKPOINT_DB, BLUEPRINT_PATH
-│       ├── state.py        ← PipelineState + StoryState TypedDicts; merge_stories reducer
-│       ├── graph.py        ← StateGraph definition (init→po→dispatcher→agents→finalize)
-│       ├── tools/          ← infrastructure utilities
-│       │   ├── logger.py           ← timestamped stdout logger
-│       │   ├── llm_client.py       ← Anthropic primary + OpenAI fallback; LLMQuotaExceeded exception
-│       │   ├── llm_adapters/       ← per-agent prompt builders + thin LLM callers (po, qa, ux, tl, reviewer, readme)
-│       │   ├── jira_client.py      ← Jira REST API v3 (ADF, JQL, transitions, flags, subtask type discovery)
-│       │   ├── jira_facade.py      ← domain adapter over JiraClient (advance/move_all/flag_for_human/post_section)
-│       │   ├── workflow.py         ← WorkflowState enum: single source of truth for Jira transition targets
-│       │   ├── path_utils.py       ← safe path normalization for AI-generated paths
-│       │   ├── pytest_runner.py    ← pytest subprocess with PYTHONPATH injection
-│       │   ├── dependencies.py     ← third-party dependency resolution (declared + UX + AST scan)
-│       │   └── aider_client.py     ← Aider CLI subprocess (gated by AIDER_ENABLED)
-│       ├── agents/         ← business-logic agents (each returns AgentResult)
-│       │   ├── contract.py         ← AgentResult(success, payload, errors) shared return contract
-│       │   ├── po_agent.py         ← Jira epic/story provisioning, has_ui detection, upstream HITL
-│       │   ├── qa_agent.py         ← Gherkin acceptance criteria + test_contract per story
-│       │   ├── ux_agent.py         ← UI/UX design spec (cli/web/tui), appends to Jira stories
-│       │   ├── tl_agent.py         ← architecture design, dependency collection, subtasks, blueprint/ files
-│       │   ├── ready_contract.py   ← Definition-of-Ready contract builder + validation (refinement gate)
-│       │   ├── reviewer_agent.py   ← DoD audit via LLM
-│       │   ├── readme_agent.py     ← README generation from blueprint + product code scan
-│       │   └── sre_agent.py        ← emulated CI/CD report, Jira Done transition
-│       └── nodes/          ← LangGraph node wrappers
-│           ├── pipeline.py         ← lifecycle nodes (init, po, qa, ux, tl, refinement_gate, finalize)
-│           ├── dev_node.py         ← development node (LLM/aider code generation)
-│           ├── test_node.py        ← testing node (pytest retry loop, mechanical recovery, two-stage targeted+full)
-│           ├── review_node.py      ← code-review node (DoD audit, 3-layer verdict filter, rework routing)
-│           ├── failure_recovery.py ← classify_failure, files_from_traceback, _scaffold_missing_module
-│           ├── dispatcher.py       ← right-to-left kanban dispatcher with WIP limits and Send() fan-out
-│           └── helpers.py          ← shared node helpers (incl. raise_quota_interrupt)
-└── tests/                  ← factory unit tests (not product tests)
-
-../                         ← product output (sibling directory)
-├── business_idea.md        ← INPUT: plain-English product description
-├── app/                    ← OUTPUT: generated production code
-└── tests/                  ← OUTPUT: generated product tests
+```text
+agile-agent-factory/        ← repository root
+├── business_idea.md        ← tracked example input
+├── app/                    ← generated production code (gitignored)
+├── tests/                  ← generated product tests (gitignored)
+└── factory/                ← tracked factory implementation
+    ├── main.py             ← entry point: LangGraph compile/resume, HITL Command(resume=) dispatch
+    ├── pyproject.toml      ← hatchling src layout; pytest pythonpath = ["src"]
+    ├── blueprint/          ← layered handoff blueprint (generated; gitignored)
+    │   ├── context/        ← business_intent.md, ux_decisions.md, qa_criteria/<story>.md
+    │   ├── architecture/   ← decisions.md, constraints.md
+    │   └── tasks/          ← per-story task files (<story_key>.md)
+    ├── src/
+    │   └── agile_agent_factory/
+    │       ├── config.py       ← env loader from factory/.env + repo-root PRODUCT_ROOT
+    │       ├── state.py        ← PipelineState + StoryState TypedDicts; merge_stories reducer
+    │       ├── graph.py        ← StateGraph definition (init→po→dispatcher→agents→finalize)
+    │       ├── tools/          ← infrastructure utilities
+    │       ├── agents/         ← business-logic agents (each returns AgentResult)
+    │       └── nodes/          ← LangGraph node wrappers
+    └── tests/              ← factory unit tests (tracked)
 ```
 
 ## Prerequisites
@@ -98,7 +71,7 @@ agile-agent-factory/        ← this repo (the factory)
 ## Setup
 
 ```bash
-cd agile-agent-factory
+cd agile-agent-factory/factory
 uv sync
 
 cp .env.example .env
@@ -183,12 +156,12 @@ The pipeline uses LangGraph `interrupt()` / `Command(resume=feedback)` for HITL:
                                                         re-run to resume
 ```
 
-State is persisted in `pipeline_checkpoint.db` via LangGraph `SqliteSaver` (gitignored). `--reset-state` deletes the database; Generated product code in `../app/` and `../tests/` is never touched by reset.
+State is persisted in `factory/pipeline_checkpoint.db` via LangGraph `SqliteSaver` (gitignored). `--reset-state` deletes the database; generated product code in repo-root `app/` and `tests/` is never touched by reset.
 
 ## Running the tests
 
 ```bash
-cd agile-agent-factory
+cd agile-agent-factory/factory
 uv run pytest tests/ -v
 ```
 

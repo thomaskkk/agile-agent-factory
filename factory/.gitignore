@@ -1,0 +1,25 @@
+.venv/
+.uv/
+.env
+.env.local
+.env.*.local
+state_manager.json
+blueprint/
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+*.swp
+*.swo
+*.db
+
+# Claude Code session data and local cache
+.claude/
+
+nimbalyst-local/
+
+.langgraph_api/
+
+PRD.md

@@ -1,7 +1,10 @@
 import re
 from pathlib import Path
 
-from agile_agent_factory.config import PRODUCT_ROOT as PARENT_ROOT
+from agile_agent_factory.config import PRODUCT_ROOT
+
+_DEFAULT_PRODUCT_ROOT = PRODUCT_ROOT
+PARENT_ROOT = PRODUCT_ROOT
 
 ROOT_WRITE_ALLOWLIST = {
     "README",
@@ -16,6 +19,13 @@ ROOT_WRITE_ALLOWLIST = {
 }
 
 
+def _product_root() -> Path:
+    current_product_root = globals()["PRODUCT_ROOT"]
+    if current_product_root != _DEFAULT_PRODUCT_ROOT:
+        return current_product_root
+    return globals().get("PARENT_ROOT", current_product_root)
+
+
 def _allowed_root_targets(allowed_root_paths: list[str] | None) -> set[Path]:
     targets: set[Path] = set()
     for entry in allowed_root_paths or []:
@@ -28,13 +38,13 @@ def _allowed_root_targets(allowed_root_paths: list[str] | None) -> set[Path]:
             continue
         if cleaned not in ROOT_WRITE_ALLOWLIST:
             continue
-        targets.add((PARENT_ROOT / cleaned).resolve())
+        targets.add((_product_root() / cleaned).resolve())
     return targets
 
 
 def normalize_generated_path(raw_path: str, allowed_root_paths: list[str] | None = None) -> Path:
     """
-    Converts an AI-generated path to an absolute path under PARENT_ROOT/app/, PARENT_ROOT/tests/,
+    Converts an AI-generated path to an absolute path under PRODUCT_ROOT/app/, PRODUCT_ROOT/tests/,
     or an explicitly allowed product-root file.
     """
     p = raw_path.strip()
@@ -50,7 +60,7 @@ def normalize_generated_path(raw_path: str, allowed_root_paths: list[str] | None
         p = re.sub(rf"^{prefix}/{prefix}/", f"{prefix}/", p)
 
     # Strip any leading path components that precede app/ or tests/.
-    # Handles LLM-hallucinated prefixes like Factory_project_claude/app/...
+    # Handles LLM-hallucinated prefixes like agile-agent-factory/app/...
     parts = Path(p).parts
     for i, part in enumerate(parts):
         if part in ("app", "tests"):
@@ -62,9 +72,10 @@ def normalize_generated_path(raw_path: str, allowed_root_paths: list[str] | None
             if tail in ROOT_WRITE_ALLOWLIST:
                 p = tail
 
-    result = (PARENT_ROOT / p).resolve()
+    base_root = _product_root()
+    result = (base_root / p).resolve()
 
-    allowed = [(PARENT_ROOT / "app").resolve(), (PARENT_ROOT / "tests").resolve()]
+    allowed = [(base_root / "app").resolve(), (base_root / "tests").resolve()]
     allowed_roots = _allowed_root_targets(allowed_root_paths)
     if not any(str(result).startswith(str(d) + "/") or result == d for d in allowed) and result not in allowed_roots:
         raise ValueError(

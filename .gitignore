@@ -1,25 +1,27 @@
-.venv/
-.uv/
-.env
-.env.local
-.env.*.local
-state_manager.json
-blueprint/
-*.log
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.idea/
-.vscode/
-*.swp
-*.swo
-*.db
+# Root-local editor and environment state
+/.aider.chat.history.md
+/.aider.input.history
+/.git-empty-root-backup/
+/.pytest_cache/
+/.venv/
+/__pycache__/
 
-# Claude Code session data and local cache
-.claude/
+# Generated product directories
+/app/
+/tests/
 
-nimbalyst-local/
+# Generated product root files
+/.env
+/.env.*
+/README
+/README.md
+/README.rst
+/README.txt
+/requirements.txt
+/pyproject.toml
+/main.py
+/app.py
+/wsgi.py
 
-.langgraph_api/
-
-PRD.md
+# Keep the checked-in example input
+!/business_idea.md

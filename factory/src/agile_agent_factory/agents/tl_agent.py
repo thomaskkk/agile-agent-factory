@@ -24,7 +24,7 @@ _ARCH_FALLBACK = {
     ],
     "subtasks": [],
     "import_rules": "All imports use `from app.<module> import <name>` from the product root.",
-    "test_command": "uv run pytest ../tests/ -v",
+    "test_command": "uv run pytest tests/ -v",
     "dependencies": [],
 }
 
@@ -118,12 +118,12 @@ def _write_architecture_files(arch: dict) -> None:
 {arch.get('import_rules', 'Use `from app.<module> import <name>` from the product root.')}
 
 ## Permitted Target Directories
-- `../app/` — all production source code
-- `../tests/` — all test code
+- `app/` — all production source code at the repo root
+- `tests/` — all test code at the repo root
 
 ## Test Command
 ```bash
-{arch.get('test_command', 'uv run pytest ../tests/ -v')}
+{arch.get('test_command', 'uv run pytest tests/ -v')}
 ```
 
 ## Expected Output Files
@@ -259,7 +259,7 @@ passing tests and will trigger HITL intervention.
 
 ### Test Command
 ```bash
-{arch.get('test_command', 'uv run pytest ../tests/ -v')}
+{arch.get('test_command', 'uv run pytest tests/ -v')}
 ```
 
 ### Definition of Done

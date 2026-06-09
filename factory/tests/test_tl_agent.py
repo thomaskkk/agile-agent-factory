@@ -36,7 +36,7 @@ def test_reuses_stored_architecture_on_resume(tmp_path, monkeypatch, mock_jira):
         "files": [{"path": "app/x.py", "purpose": "p", "functions": []}],
         "subtasks": [{"title": "Task A", "story_key": "F1-1", "description": "d"}],
         "import_rules": "...",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": [],
     }
     state = _state("upstream_arch_done", architecture=stored_arch)
@@ -68,7 +68,7 @@ def test_skips_already_created_subtasks(tmp_path, monkeypatch, mock_jira):
             {"title": "Task B", "story_key": "F1-1", "description": "d"},
         ],
         "import_rules": "...",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": [],
     }
     # Task A already created in a prior (interrupted) run
@@ -101,7 +101,7 @@ def test_fresh_run_calls_llm_and_persists_architecture(tmp_path, monkeypatch, mo
         "files": [],
         "subtasks": [],
         "import_rules": "...",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": ["flask"],
     }
     state = _state("upstream_ux_done")
@@ -128,7 +128,7 @@ def test_architecture_prompt_includes_validated_ready_contract(tmp_path, monkeyp
     monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
     (tmp_path / "business_idea.md").write_text("Build something.")
 
-    arch = {"files": [], "subtasks": [], "import_rules": "...", "test_command": "uv run pytest ../tests/ -v", "dependencies": []}
+    arch = {"files": [], "subtasks": [], "import_rules": "...", "test_command": "uv run pytest tests/ -v", "dependencies": []}
     contract = {"story_key": "F1-1", "acceptance_criteria": ["Scenario: Contract-only behavior"], "ready_validated": True}
     state = _state("upstream_ux_done")
     jira = mock_jira
@@ -155,7 +155,7 @@ def test_writes_architecture_files(tmp_path, monkeypatch, mock_jira):
         "files": [{"path": "app/main.py", "purpose": "Entry point", "functions": ["main()"]}],
         "subtasks": [],
         "import_rules": "from app.main import main",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": ["requests"],
     }
     state = _state("upstream_ux_done")
@@ -193,7 +193,7 @@ def test_writes_task_file_per_story(tmp_path, monkeypatch, mock_jira):
         "files": [{"path": "app/main.py", "purpose": "Entry point", "functions": []}],
         "subtasks": [],
         "import_rules": "from app.main import main",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": [],
     }
     gherkin = {
@@ -226,7 +226,7 @@ def test_task_file_leads_with_active_story_contract_and_read_only_context(tmp_pa
         "files": [{"path": "app/main.py", "purpose": "Entry point", "functions": []}],
         "subtasks": [],
         "import_rules": "from app.main import main",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": [],
     }
     contracts = {
@@ -255,7 +255,7 @@ def test_blueprint_task_file_includes_test_contract_section(tmp_path, monkeypatc
     arch = {
         "files": [{"path": "app/auth.py", "purpose": "auth module", "functions": ["login_user(username: str, password: str) -> dict"]}],
         "import_rules": "from app.<module> import <name>",
-        "test_command": "uv run pytest ../tests/ -v",
+        "test_command": "uv run pytest tests/ -v",
         "dependencies": [],
     }
     ready_contract = {
