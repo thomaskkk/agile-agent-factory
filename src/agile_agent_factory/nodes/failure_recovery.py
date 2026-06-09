@@ -161,6 +161,66 @@ def _scaffold_missing_module(output: str) -> list[str]:
     return scaffolded
 
 
+def scaffold_paths(missing_paths: list[str]) -> list[str]:
+    """Create empty package/module stubs for an explicit list of missing paths.
+
+    Path-list-driven counterpart to :func:`_scaffold_missing_module` (which parses
+    pytest output). Only creates empty ``__init__.py`` package files and empty leaf
+    ``.py`` module files under app/ or tests/ — never test-function or fixture stubs
+    (an empty ``def test_x(): pass`` would trivially pass and defeat the reviewer's
+    DoD audit). Non-``.py`` and root-level paths are skipped; they need real content.
+
+    Returns relative paths of files created (empty list when nothing was scaffolded).
+    """
+    scaffolded: list[str] = []
+
+    for raw_path in missing_paths:
+        rel = (raw_path or "").strip().rstrip("/")
+        if not rel.endswith(".py"):
+            continue
+        parts = rel.split("/")
+        if parts[0] not in ("app", "tests"):
+            continue
+
+        # Ensure all parent packages have __init__.py
+        for i in range(1, len(parts)):
+            init_path = "/".join(parts[:i]) + "/__init__.py"
+            try:
+                init_target = normalize_generated_path(init_path)
+            except ValueError:
+                continue
+            if init_target.exists():
+                continue
+            init_target.parent.mkdir(parents=True, exist_ok=True)
+            # Never shadow a real module with an empty stub package
+            shadow = init_target.parent.parent / (init_target.parent.name + ".py")
+            if shadow.exists() and shadow.read_text().strip():
+                log(f"Scaffold: skipping {init_path} — would shadow existing real module {shadow.name}")
+                continue
+            if not resolve_namespace_collision(init_target):
+                continue
+            init_target.write_text("")
+            log(f"Scaffolded __init__.py: {init_path}")
+            scaffolded.append(init_path)
+
+        # Scaffold the leaf module/file itself (empty)
+        try:
+            target = normalize_generated_path(rel)
+        except ValueError as e:
+            log(f"Could not scaffold {rel}: {e}")
+            continue
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not resolve_namespace_collision(target):
+            continue
+        target.write_text("")
+        log(f"Scaffolded empty module: {rel}")
+        scaffolded.append(rel)
+
+    return scaffolded
+
+
 def _scaffold_fixture(output: str) -> list[str]:
     """Append a minimal pytest fixture stub to tests/conftest.py for each missing fixture.
 

@@ -155,6 +155,71 @@ def test_scaffold_missing_module_empty_output():
 
 
 # ---------------------------------------------------------------------------
+# scaffold_paths — path-list-driven structural stubs (I5)
+# ---------------------------------------------------------------------------
+
+def test_scaffold_paths_creates_package_and_leaf_stubs(tmp_path, monkeypatch):
+    """scaffold_paths creates parent __init__.py packages and an empty leaf module."""
+    import agile_agent_factory.nodes.failure_recovery as fr
+    from pathlib import Path
+
+    def fake_norm(path: str):
+        p = Path(path)
+        if str(p).startswith("app/") or str(p).startswith("tests/"):
+            return tmp_path / p
+        raise ValueError(f"Bad path: {path}")
+
+    monkeypatch.setattr(fr, "normalize_generated_path", fake_norm)
+
+    result = fr.scaffold_paths(["app/pkg/leaf.py"])
+
+    assert "app/pkg/leaf.py" in result
+    assert "app/pkg/__init__.py" in result
+    assert (tmp_path / "app" / "pkg" / "leaf.py").read_text() == ""
+    assert (tmp_path / "app" / "pkg" / "__init__.py").read_text() == ""
+
+
+def test_scaffold_paths_skips_non_py_and_root_files(monkeypatch):
+    """Non-.py paths, directory entries, and root-level files are never scaffolded."""
+    import agile_agent_factory.nodes.failure_recovery as fr
+
+    called = []
+
+    def fake_norm(path: str):
+        called.append(path)
+        raise AssertionError("normalize must not be reached for filtered paths")
+
+    monkeypatch.setattr(fr, "normalize_generated_path", fake_norm)
+
+    result = fr.scaffold_paths(["README.md", "app/templates/", "requirements.txt", "main.py"])
+
+    assert result == []
+    assert called == []
+
+
+def test_scaffold_paths_skips_existing_files(tmp_path, monkeypatch):
+    """Existing files are left untouched (no overwrite, not reported as scaffolded)."""
+    import agile_agent_factory.nodes.failure_recovery as fr
+    from pathlib import Path
+
+    def fake_norm(path: str):
+        p = Path(path)
+        if str(p).startswith("app/") or str(p).startswith("tests/"):
+            return tmp_path / p
+        raise ValueError(f"Bad path: {path}")
+
+    monkeypatch.setattr(fr, "normalize_generated_path", fake_norm)
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "existing.py").write_text("x = 1\n")
+
+    result = fr.scaffold_paths(["app/existing.py"])
+
+    assert "app/existing.py" not in result
+    assert (tmp_path / "app" / "existing.py").read_text() == "x = 1\n"
+
+
+# ---------------------------------------------------------------------------
 # classify_failure — new classes (Milestone 1)
 # ---------------------------------------------------------------------------
 

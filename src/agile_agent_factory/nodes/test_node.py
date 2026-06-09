@@ -229,7 +229,7 @@ def test_node(state: PipelineState) -> dict:
             if full_suite_first:
                 exit_code, output = run_pytest(deps)
                 if exit_code != 0 and write_scope:
-                    tb_files = _failing_files_in_output(output)
+                    tb_files = _failing_files_in_output(output) or _failing_files_from_node_ids(output)
                     in_scope = any(_path_in_write_scope(f, write_scope) for f in tb_files)
                     if tb_files and not in_scope:
                         log(f"Cross-story regression detected for {sk}; re-routing owners.")
@@ -253,7 +253,7 @@ def test_node(state: PipelineState) -> dict:
                     if exit_code != 0:
                         # Targeted green, full suite red — classify the regression
                         failure_class = classify_failure(exit_code, output)
-                        tb_files = _failing_files_in_output(output)
+                        tb_files = _failing_files_in_output(output) or _failing_files_from_node_ids(output)
                         in_scope = any(_path_in_write_scope(f, write_scope) for f in tb_files)
                         if in_scope:
                             # Our write-scope still has issues — keep iterating correction
@@ -389,8 +389,10 @@ def test_node(state: PipelineState) -> dict:
                 log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
                 correction_scope = _augment_scope_for_conftest(write_scope, failure_class, output)
                 repeated_hint = _repeated_failure_hint(failure_class, failure_streak)
+                # Bind defaults so a non-raising/None quota return can't fall through unbound.
+                correction_status, corrected = "empty", []
+                before_snapshot = _snapshot_product_files()
                 try:
-                    before_snapshot = _snapshot_product_files()
                     correction_status, corrected = _correct_code(
                         blueprint,
                         repeated_hint + hint + output,
@@ -403,6 +405,7 @@ def test_node(state: PipelineState) -> dict:
                     patch = raise_quota_interrupt(jira, sk, e, state=state)
                     if patch:
                         return patch
+                    correction_status, corrected = "empty", []
                 changed_after = _changed_product_files(before_snapshot)
                 violations = _write_scope_violations(changed_after, correction_scope or None)
                 if violations:
@@ -451,8 +454,10 @@ def test_node(state: PipelineState) -> dict:
                 correction_scope = focused_scope
                 log(f"Repeated failure for {sk} — narrowing correction scope to {focused_scope}.")
         repeated_hint = _repeated_failure_hint(failure_class, failure_streak)
+        # Bind defaults so a non-raising/None quota return can't fall through unbound.
+        correction_status, corrected = "empty", []
+        before_snapshot = _snapshot_product_files()
         try:
-            before_snapshot = _snapshot_product_files()
             correction_status, corrected = _correct_code(
                 blueprint,
                 repeated_hint + output,
@@ -465,6 +470,7 @@ def test_node(state: PipelineState) -> dict:
             patch = raise_quota_interrupt(jira, sk, e, state=state)
             if patch:
                 return patch
+            correction_status, corrected = "empty", []
         changed_after = _changed_product_files(before_snapshot)
         violations = _write_scope_violations(changed_after, correction_scope or None)
         if violations:
@@ -527,6 +533,23 @@ def _failing_files_in_output(output: str) -> list[str]:
     import re
     pattern = re.compile(r"\b((?:app|tests)/[\w/]+\.py)\b")
     seen = dict.fromkeys(pattern.findall(output))
+    return list(seen)
+
+
+_NODE_ID_RE = re.compile(
+    r"^(?:FAILED|ERROR)\s+((?:app|tests)/[^\s:]+\.py)", re.MULTILINE
+)
+
+
+def _failing_files_from_node_ids(output: str) -> list[str]:
+    """Recover owning test files from pytest node ids.
+
+    Handles ``FAILED tests/...py::test_...`` and ``ERROR tests/...py`` lines whose
+    paths the plain path regex may miss (e.g. hyphens, dotted names). Used as a
+    fallback so a full-suite regression with node-id-only output can still be
+    attributed to a file instead of the unownable ``"unclassified"`` sentinel.
+    """
+    seen = dict.fromkeys(_NODE_ID_RE.findall(output))
     return list(seen)
 
 

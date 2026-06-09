@@ -453,7 +453,9 @@ Current source files:
                 try:
                     raw2 = call_llm(reduced_prompt, system=system, model=model, prefill="[")
                     files = _parse_correction_response(raw2)
-                except (LLMQuotaExceeded, Exception) as e:
+                except LLMQuotaExceeded:
+                    raise
+                except Exception as e:
                     log(f"Reduced-scope retry failed: {e}")
                     files = None
             if files is None:

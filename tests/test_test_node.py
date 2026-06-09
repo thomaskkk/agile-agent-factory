@@ -547,3 +547,102 @@ def test_collection_error_generic_uses_targeted_llm_hint(monkeypatch):
 
     assert result["stories"]["F1-1"]["column"] == "code_review"
     assert "TARGETED FIX REQUIRED" in correct_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# B2: recover owning test files from pytest node ids (avoid "unclassified")
+# ---------------------------------------------------------------------------
+
+def test_failing_files_from_node_ids_recovers_hyphenated_path():
+    """Node-id recovery captures paths the plain path regex misses (e.g. hyphens)."""
+    tn = _tn()
+    output = "FAILED tests/test-other.py::test_foo - AssertionError\nERROR tests/test-setup.py"
+    # The plain regex misses hyphenated paths entirely.
+    assert tn._failing_files_in_output(output) == []
+    recovered = tn._failing_files_from_node_ids(output)
+    assert "tests/test-other.py" in recovered
+    assert "tests/test-setup.py" in recovered
+
+
+def test_node_id_only_regression_recovers_real_file_not_unclassified(monkeypatch):
+    """B2: full suite red with node-id-only output must attribute a real owning file.
+
+    The quarantine story's targeted tests pass; the full suite fails citing a file whose
+    path the plain regex cannot extract. The node-id fallback recovers it so the blocker
+    is the real path rather than the unownable "unclassified" sentinel.
+    """
+    tn = _tn()
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "testing",
+                "test_contract": {
+                    "test_file": "tests/test_auth.py",
+                    "target_imports": ["from app.auth import login"],
+                },
+            }
+        },
+        "epic_keys": [],
+        "gherkin_criteria": {},
+    }
+
+    call_n = [0]
+    jira = _mock_jira()
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        call_n[0] += 1
+        if call_n[0] == 1:
+            return 0, "1 passed"  # targeted passes
+        # full suite: node-id-only failure with a path the plain regex misses
+        return 1, "FAILED tests/test-other.py::test_foo - AssertionError"
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "blueprint")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: jira)
+
+    result = tn.test_node(state)
+
+    blockers = result["stories"]["F1-1"]["regression_blockers"]
+    assert blockers == ["tests/test-other.py"], "node-id path must replace the unclassified fallback"
+    assert "unclassified" not in blockers
+
+
+# ---------------------------------------------------------------------------
+# B4: quota fall-through (non-raising / None return) must not raise UnboundLocalError
+# ---------------------------------------------------------------------------
+
+def test_quota_fall_through_does_not_raise_unbound_local(monkeypatch):
+    """B4: if the quota handler returns without a patch and without raising, the loop
+    must continue with bound correction_status/corrected defaults (no UnboundLocalError)."""
+    tn = _tn()
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    state = _make_state()
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        return 1, "FAILED tests/test_x.py::test_y\nAssertionError: boom"
+
+    def fake_correct(*a, **kw):
+        raise LLMQuotaExceeded("anthropic", "rate limited")
+
+    interrupts = []
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_correct_code", fake_correct)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "bp")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: _mock_jira())
+    # Simulate the non-raising / None return path that the guard defends against.
+    monkeypatch.setattr(tn, "raise_quota_interrupt", lambda *a, **kw: None)
+
+    with patch("langgraph.types.interrupt", side_effect=lambda payload: interrupts.append(payload)):
+        result = tn.test_node(state)
+
+    # Must terminate via the correction-failure HITL, not crash with UnboundLocalError.
+    assert isinstance(result, dict)
+    assert result["stories"]["F1-1"]["hitl_type"] == "intervention"
+    assert interrupts, "correction-failure HITL must have fired after repeated empty corrections"

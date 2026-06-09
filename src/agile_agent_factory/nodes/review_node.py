@@ -14,9 +14,13 @@ from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 from agile_agent_factory.nodes.helpers import (
     _active_story,
+    _changed_product_files,
     derive_story_write_scope,
     _path_in_write_scope,
+    _restore_product_files,
     _safe_transition,
+    _snapshot_product_files,
+    _write_scope_violations,
     raise_quota_interrupt,
 )
 
@@ -96,12 +100,17 @@ def _pre_review_gate(
     write_scope: list[str],
     product_root: Path,
     extra_packages: list[str] | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str]:
     """Deterministic structural checks run before the LLM reviewer.
 
-    Returns (passed, reason):
-      passed=True  → all checks green, proceed to LLM review
-      passed=False → reason describes what failed; treat as rework trigger
+    Returns (passed, reason, category):
+      passed=True  → all checks green, proceed to LLM review (reason="", category="")
+      passed=False → reason describes what failed; category classifies it so the
+                     caller can route mechanically:
+                       "missing_files"  — write_scope file absent (Check 1)
+                       "missing_tests"  — expected test function absent (Check 2)
+                       "syntax"         — syntax error in a source file (Check 3)
+                       "test_failure"   — targeted pytest run failed (Check 4)
     """
     from agile_agent_factory.tools.pytest_runner import run_pytest
 
@@ -119,7 +128,7 @@ def _pre_review_gate(
             if not target.exists():
                 missing.append(scoped_path)
         if missing:
-            return False, f"Missing required files: {missing}"
+            return False, f"Missing required files: {missing}", "missing_files"
 
     # --- Check 2: Test function presence ---
     rc = story.get("ready_contract", {}) or {}
@@ -136,7 +145,7 @@ def _pre_review_gate(
                 }
                 missing_fns = [fn for fn in expected_tests if fn not in defined_names]
                 if missing_fns:
-                    return False, f"Missing expected test functions: {missing_fns}"
+                    return False, f"Missing expected test functions: {missing_fns}", "missing_tests"
             except Exception:
                 # If we can't parse the test file, skip this check (don't hard-fail)
                 pass
@@ -156,7 +165,7 @@ def _pre_review_gate(
                 source = src_path.read_text(encoding="utf-8")
                 ast.parse(source)
             except SyntaxError as e:
-                return False, f"Syntax error in {src_rel}: {e}"
+                return False, f"Syntax error in {src_rel}: {e}", "syntax"
             except Exception:
                 pass
 
@@ -171,9 +180,47 @@ def _pre_review_gate(
             if exit_code != 0 and exit_code != 5:
                 from agile_agent_factory.nodes.dev_node import _extract_error_summary
                 error_detail = _extract_error_summary(output)
-                return False, f"Targeted tests failing: {error_detail}"
+                return False, f"Targeted tests failing: {error_detail}", "test_failure"
 
-    return True, ""
+    return True, "", ""
+
+
+def _missing_scope_files(write_scope: list[str], product_root: Path) -> list[str]:
+    """Return write_scope entries that are absent from disk (mirrors gate Check 1)."""
+    missing: list[str] = []
+    for scoped_path in write_scope or []:
+        target = product_root / scoped_path.rstrip("/")
+        if not target.exists():
+            missing.append(scoped_path)
+    return missing
+
+
+def _scaffold_structural_gaps(write_scope: list[str], product_root: Path) -> list[str]:
+    """Guarded, path-list-driven scaffold of missing package/module stubs (I5).
+
+    Only the write_scope files that are absent are scaffolded, and the whole pass is
+    wrapped snapshot → write → write-scope check → restore-on-violation so a stray
+    write can never escape the story's ownership boundary. Returns the in-scope files
+    actually created (empty when nothing safe was scaffolded).
+    """
+    from agile_agent_factory.nodes.failure_recovery import scaffold_paths
+
+    missing = _missing_scope_files(write_scope, product_root)
+    if not missing:
+        return []
+
+    before_snapshot = _snapshot_product_files()
+    scaffolded = scaffold_paths(missing)
+    if not scaffolded:
+        return []
+
+    changed = _changed_product_files(before_snapshot)
+    violations = _write_scope_violations(changed, write_scope or None)
+    if violations:
+        _restore_product_files(before_snapshot, changed)
+        log(f"Pre-gate scaffold exceeded write_scope; rolled back: {violations}")
+        return []
+    return scaffolded
 
 
 def review_node(state: PipelineState) -> dict:
@@ -198,7 +245,62 @@ def review_node(state: PipelineState) -> dict:
     from agile_agent_factory.tools.dependencies import resolve_dependencies
     from agile_agent_factory.nodes.helpers import _to_legacy_state
     deps = resolve_dependencies(_to_legacy_state(state, sk), _PRODUCT_ROOT)
-    gate_passed, gate_reason = _pre_review_gate(story, write_scope, _PRODUCT_ROOT, extra_packages=deps)
+    gate_passed, gate_reason, gate_category = _pre_review_gate(
+        story, write_scope, _PRODUCT_ROOT, extra_packages=deps
+    )
+
+    # I5: mechanically scaffold missing package/module stubs before counting a rework
+    # cycle. Re-run the gate once after a successful scaffold so the category reflects
+    # what (if anything) still blocks the story.
+    if not gate_passed and gate_category == "missing_files":
+        scaffolded = _scaffold_structural_gaps(write_scope, _PRODUCT_ROOT)
+        if scaffolded:
+            log(f"Review: scaffolded structural stubs for {sk}: {scaffolded}. Re-running pre-gate.")
+            try:
+                jira.add_comment_adf(
+                    sk,
+                    make_adf_doc(
+                        "Pre-gate auto-scaffolded missing package/module stubs "
+                        f"(no rework retry consumed): {', '.join(scaffolded)}."
+                    ),
+                )
+            except Exception:
+                pass
+            gate_passed, gate_reason, gate_category = _pre_review_gate(
+                story, write_scope, _PRODUCT_ROOT, extra_packages=deps
+            )
+
+    # I3: a targeted-test failure belongs in the testing column's richer recovery loop,
+    # not a generic dev-rework cycle. Route it back to testing without consuming a review
+    # retry. test_node only advances to code_review once the same targeted suite passes,
+    # so the gate's Check 4 will pass on return (no ping-pong).
+    if not gate_passed and gate_category == "test_failure":
+        log(f"Review: pre-gate targeted tests failing for {sk} — routing back to testing (no retry cost).")
+        try:
+            jira.add_comment_adf(
+                sk,
+                make_adf_doc(
+                    "Pre-gate detected failing targeted tests; re-entering testing for "
+                    f"mechanical correction (no review retry consumed).\n\nReason: {gate_reason}"
+                ),
+            )
+        except Exception:
+            pass
+        # Testing runs while the issue sits in the Development state; send it back there.
+        _safe_transition(jira, sk, WorkflowState.TO_DEVELOPMENT)
+        return {
+            "review_approved": False,
+            "stories": {sk: {
+                "column": "testing",
+                "review_status": None,
+                "retries": 0,
+                "correction_failures": 0,
+                "failure_streak": 0,
+                "last_failure_signature": "",
+                "last_failure_class": "",
+            }},
+        }
+
     if not gate_passed:
         log(f"Review: pre-gate failed for {sk}: {gate_reason}")
         review_retries += 1

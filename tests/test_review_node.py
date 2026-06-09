@@ -196,7 +196,7 @@ def test_prg_check1_fails_when_file_missing(tmp_path):
     prg = _import_prg()
     story = {}
     write_scope = ["app/missing.py"]
-    passed, reason = prg(story, write_scope, tmp_path)
+    passed, reason, _category = prg(story, write_scope, tmp_path)
     assert passed is False
     assert "Missing required files" in reason
     assert "app/missing.py" in reason
@@ -209,7 +209,7 @@ def test_prg_check1_passes_when_all_files_exist(tmp_path):
     (tmp_path / "app" / "present.py").write_text("x = 1")
     story = {}
     write_scope = ["app/present.py"]
-    passed, reason = prg(story, write_scope, tmp_path)
+    passed, reason, _category = prg(story, write_scope, tmp_path)
     # check 1 passes; no test_contract so checks 2–4 also trivially pass
     assert passed is True
     assert reason == ""
@@ -221,7 +221,7 @@ def test_prg_check1_accepts_existing_directory_scope(tmp_path):
     (tmp_path / "app" / "templates").mkdir(parents=True)
     story = {}
     write_scope = ["app/templates/"]
-    passed, reason = prg(story, write_scope, tmp_path)
+    passed, reason, _category = prg(story, write_scope, tmp_path)
     assert passed is True
     assert reason == ""
 
@@ -231,7 +231,7 @@ def test_prg_check1_reports_missing_directory_scope(tmp_path):
     prg = _import_prg()
     story = {}
     write_scope = ["app/repository/"]
-    passed, reason = prg(story, write_scope, tmp_path)
+    passed, reason, _category = prg(story, write_scope, tmp_path)
     assert passed is False
     assert "app/repository/" in reason
 
@@ -255,7 +255,7 @@ def test_prg_check2_fails_when_expected_test_missing(tmp_path):
             "expected_tests": ["test_login_valid", "test_login_invalid"],
         },
     }
-    passed, reason = prg(story, [], tmp_path)
+    passed, reason, _category = prg(story, [], tmp_path)
     assert passed is False
     assert "Missing expected test functions" in reason
     assert "test_login_valid" in reason
@@ -277,7 +277,7 @@ def test_prg_check2_passes_when_all_expected_tests_present(tmp_path):
             "expected_tests": ["test_login_valid", "test_login_invalid"],
         },
     }
-    passed, reason = prg(story, [], tmp_path)
+    passed, reason, _category = prg(story, [], tmp_path)
     assert passed is True
     assert reason == ""
 
@@ -302,7 +302,7 @@ def test_prg_check2_uses_ready_contract_not_test_contract(tmp_path):
             "expected_tests": ["test_login_valid"],  # normalized key — MUST be read here
         },
     }
-    passed, reason = prg(story, [], tmp_path)
+    passed, reason, _category = prg(story, [], tmp_path)
     assert passed is False, "Gate must detect missing test_login_valid via ready_contract"
     assert "test_login_valid" in reason
 
@@ -320,7 +320,7 @@ def test_prg_check3_fails_when_source_has_syntax_error(tmp_path):
             "target_imports": ["from app.auth import login"],
         }
     }
-    passed, reason = prg(story, [], tmp_path)
+    passed, reason, _category = prg(story, [], tmp_path)
     assert passed is False
     assert "Syntax error in app/auth.py" in reason
 
@@ -338,7 +338,7 @@ def test_prg_check3_passes_when_source_is_valid(tmp_path):
             "target_imports": ["from app.auth import login"],
         }
     }
-    passed, reason = prg(story, [], tmp_path)
+    passed, reason, _category = prg(story, [], tmp_path)
     assert passed is True
     assert reason == ""
 
@@ -363,7 +363,7 @@ def test_prg_check4_fails_when_pytest_fails(tmp_path):
         "agile_agent_factory.tools.pytest_runner.run_pytest",
         return_value=(1, "FAILED tests/test_foo.py::test_pass - AssertionError"),
     ):
-        passed, reason = prg(story, [], tmp_path)
+        passed, reason, _category = prg(story, [], tmp_path)
     assert passed is False
     assert "Targeted tests failing" in reason
 
@@ -386,7 +386,7 @@ def test_prg_check4_passes_when_pytest_passes(tmp_path):
         "agile_agent_factory.tools.pytest_runner.run_pytest",
         return_value=(0, "1 passed"),
     ):
-        passed, reason = prg(story, [], tmp_path)
+        passed, reason, _category = prg(story, [], tmp_path)
     assert passed is True
     assert reason == ""
 
@@ -408,7 +408,7 @@ def test_prg_check4_passes_extra_packages_to_run_pytest(tmp_path):
         "agile_agent_factory.tools.pytest_runner.run_pytest",
         return_value=(0, "1 passed"),
     ) as mock_run:
-        passed, reason = prg(story, [], tmp_path, extra_packages=["flask", "sqlalchemy"])
+        passed, reason, _category = prg(story, [], tmp_path, extra_packages=["flask", "sqlalchemy"])
     assert passed is True
     mock_run.assert_called_once()
     call_args = mock_run.call_args
@@ -438,7 +438,7 @@ def test_prg_all_checks_pass(tmp_path):
         "agile_agent_factory.tools.pytest_runner.run_pytest",
         return_value=(0, "1 passed"),
     ):
-        passed, reason = prg(story, write_scope, tmp_path)
+        passed, reason, _category = prg(story, write_scope, tmp_path)
     assert passed is True
     assert reason == ""
 
@@ -473,7 +473,7 @@ def test_review_node_routes_rework_when_gate_fails():
     state = _make_review_state()
 
     with (
-        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing required files: ['app/x.py']")),
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing required files: ['app/x.py']", "missing_files")),
         patch("agile_agent_factory.agents.reviewer_agent.review_patch") as mock_review,
         patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
     ):
@@ -496,7 +496,7 @@ def test_review_node_calls_review_patch_when_gate_passes():
     approved_result.payload = {"approved": True, "reason": ""}
 
     with (
-        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(True, "")),
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(True, "", "")),
         patch("agile_agent_factory.agents.reviewer_agent.review_patch", return_value=approved_result) as mock_review,
         patch("agile_agent_factory.tools.jira_client.JiraClient") as MockJira,
     ):
@@ -524,7 +524,7 @@ def test_review_node_hitl_exhaustion_does_not_clear_flag():
     state = _make_review_state(extra_story={"review_retries": MAX_REVIEW_RETRIES - 1})
 
     with (
-        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing files")),
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing files", "missing_files")),
         patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
         patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
         patch("langgraph.types.interrupt"),
@@ -549,7 +549,7 @@ def test_review_node_hitl_exhaustion_return_does_not_reset_review_retries():
     state = _make_review_state(extra_story={"review_retries": MAX_REVIEW_RETRIES - 1})
 
     with (
-        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing files")),
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", return_value=(False, "Missing files", "missing_files")),
         patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
         patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
         patch("langgraph.types.interrupt"),
@@ -558,3 +558,125 @@ def test_review_node_hitl_exhaustion_return_does_not_reset_review_retries():
         result = rn.review_node(state)
 
     assert "review_retries" not in result
+
+
+# ---------------------------------------------------------------------------
+# I3: pre-gate targeted-test failure routes back to testing (no retry cost)
+# ---------------------------------------------------------------------------
+
+def test_review_node_routes_test_failure_back_to_testing_no_retry():
+    """A pre-gate Check 4 (targeted test) failure re-enters testing without consuming a
+    review retry and without invoking the LLM reviewer."""
+    rn = _import_rn()
+
+    state = _make_review_state(extra_story={"review_retries": 1})
+    state["review_retries"] = 1
+
+    with (
+        patch(
+            "agile_agent_factory.nodes.review_node._pre_review_gate",
+            return_value=(False, "Targeted tests failing: AssertionError", "test_failure"),
+        ),
+        patch("agile_agent_factory.agents.reviewer_agent.review_patch") as mock_review,
+        patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
+        patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
+    ):
+        MockJira.return_value = MagicMock()
+        result = rn.review_node(state)
+
+    mock_review.assert_not_called()
+    story_patch = result["stories"]["F1-1"]
+    assert story_patch["column"] == "testing"
+    assert story_patch["review_status"] is None
+    assert story_patch["retries"] == 0
+    assert story_patch["correction_failures"] == 0
+    # review_retries must be left untouched (not incremented, not emitted)
+    assert "review_retries" not in result
+    assert "review_retries" not in story_patch
+
+
+# ---------------------------------------------------------------------------
+# I5: structural pre-gate failures are mechanically scaffolded before a rework cycle
+# ---------------------------------------------------------------------------
+
+def test_review_node_scaffolds_missing_files_then_proceeds_no_retry():
+    """missing_files → guarded scaffold → gate re-run passes → LLM review proceeds with
+    no review_retries increment."""
+    rn = _import_rn()
+
+    state = _make_review_state(extra_story={"review_retries": 0})
+
+    approved = MagicMock()
+    approved.payload = {"approved": True, "reason": ""}
+
+    gate_seq = [
+        (False, "Missing required files: ['app/pkg/__init__.py']", "missing_files"),
+        (True, "", ""),
+    ]
+
+    with (
+        patch("agile_agent_factory.nodes.review_node._pre_review_gate", side_effect=gate_seq) as mock_gate,
+        patch(
+            "agile_agent_factory.nodes.review_node._scaffold_structural_gaps",
+            return_value=["app/pkg/__init__.py"],
+        ) as mock_scaffold,
+        patch("agile_agent_factory.agents.reviewer_agent.review_patch", return_value=approved) as mock_review,
+        patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
+        patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
+    ):
+        MockJira.return_value = MagicMock()
+        result = rn.review_node(state)
+
+    mock_scaffold.assert_called_once()
+    assert mock_gate.call_count == 2, "gate must be re-run once after a successful scaffold"
+    mock_review.assert_called_once()
+    assert result["review_approved"] is True
+    assert result["stories"]["F1-1"]["review_retries"] == 0
+
+
+def test_review_node_missing_files_no_scaffold_falls_through_to_rework():
+    """When nothing can be safely scaffolded, the structural failure still consumes a
+    rework retry (existing behavior preserved)."""
+    rn = _import_rn()
+
+    state = _make_review_state(extra_story={"review_retries": 0})
+
+    with (
+        patch(
+            "agile_agent_factory.nodes.review_node._pre_review_gate",
+            return_value=(False, "Missing required files: ['app/main.py']", "missing_files"),
+        ) as mock_gate,
+        patch("agile_agent_factory.nodes.review_node._scaffold_structural_gaps", return_value=[]),
+        patch("agile_agent_factory.agents.reviewer_agent.review_patch") as mock_review,
+        patch("agile_agent_factory.nodes.review_node.JiraClient") as MockJira,
+        patch("agile_agent_factory.tools.dependencies.resolve_dependencies", return_value=[]),
+    ):
+        MockJira.return_value = MagicMock()
+        result = rn.review_node(state)
+
+    mock_review.assert_not_called()
+    # gate only runs once (no re-run, since nothing was scaffolded)
+    assert mock_gate.call_count == 1
+    story_patch = result["stories"]["F1-1"]
+    assert story_patch["review_status"] == "rework_needed"
+    assert story_patch["review_retries"] == 1
+
+
+def test_scaffold_structural_gaps_rolls_back_out_of_scope_writes(tmp_path, monkeypatch):
+    """I5 guard: scaffolding that would create files outside write_scope (e.g. parent
+    package __init__.py files not owned by the story) is fully rolled back."""
+    import agile_agent_factory.tools.path_utils as pu
+    rn = _import_rn()
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    # Only the leaf is owned; the app/__init__.py + app/pkg/__init__.py that scaffold_paths
+    # must also create are NOT in scope, so the whole pass must roll back.
+    write_scope = ["app/pkg/leaf.py"]
+
+    with patch("agile_agent_factory.nodes.helpers.PRODUCT_ROOT", tmp_path):
+        scaffolded = rn._scaffold_structural_gaps(write_scope, tmp_path)
+
+    assert scaffolded == []
+    assert not (tmp_path / "app" / "pkg" / "leaf.py").exists()
+    assert not (tmp_path / "app" / "__init__.py").exists()
+    assert not (tmp_path / "app" / "pkg" / "__init__.py").exists()

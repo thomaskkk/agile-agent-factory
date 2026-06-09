@@ -54,6 +54,36 @@ def _ensure_risk_blocker(jira: JiraClient, payload: dict, risk_score: float) -> 
     return blocking_key
 
 
+def _readiness_feedback_block(story: dict) -> str:
+    """Format a story's readiness-validation errors into a corrective instruction block.
+
+    Returns "" when the story carries no ready_validation_errors. Used to turn a
+    blind refinement re-run (identical input → identical failure) into a corrective
+    one by telling the agent exactly what to resolve.
+    """
+    errors = [e for e in (story.get("ready_validation_errors") or []) if str(e).strip()]
+    if not errors:
+        return ""
+    bullets = "\n".join(f"  - {e}" for e in errors)
+    return (
+        "Your previous refinement output failed readiness validation with:\n"
+        f"{bullets}\n"
+        "Regenerate your output so every one of these is fully resolved."
+    )
+
+
+def _combined_refinement_feedback(story: dict) -> str:
+    """Combine any human HITL feedback with the readiness-error correction block."""
+    parts = []
+    hitl = (story.get("hitl_feedback") or "").strip()
+    if hitl:
+        parts.append(hitl)
+    readiness = _readiness_feedback_block(story)
+    if readiness:
+        parts.append(readiness)
+    return "\n\n".join(parts)
+
+
 def init_node(state: PipelineState) -> dict:
     """Read business_idea.md and initialize shared pipeline state."""
     business_idea_path = PRODUCT_ROOT / "business_idea.md"
@@ -154,17 +184,16 @@ def qa_node(state: PipelineState) -> dict:
     sk, story = _active_story(state)
     log(f"QA: generating Gherkin criteria for {sk}.")
 
+    feedback = _combined_refinement_feedback(story)
+    story_feedback = {sk: feedback} if feedback else None
+
     try:
-        result = inject_gherkin_criteria(
-            jira,
-            [sk],
-            story_feedback={sk: story.get("hitl_feedback", "")} if story.get("hitl_feedback") else None,
-        )
+        result = inject_gherkin_criteria(jira, [sk], story_feedback=story_feedback)
     except LLMQuotaExceeded as e:
         patch = raise_quota_interrupt(jira, sk, e, state=state)
         if patch:
             return patch
-        result = inject_gherkin_criteria(jira, [sk])
+        result = inject_gherkin_criteria(jira, [sk], story_feedback=story_feedback)
 
     criteria = result.payload["gherkin_criteria"].get(sk, [])
     test_contract = result.payload["test_contracts"].get(sk, {})
@@ -193,19 +222,20 @@ def ux_node(state: PipelineState) -> dict:
     legacy = _to_legacy_state(state, sk)
     log(f"UX: designing experience for {sk}.")
 
+    feedback = _combined_refinement_feedback(story)
+    story_feedback = {sk: feedback} if feedback else None
+
     try:
         spec = design_user_experience(
-            jira,
-            [sk],
-            gherkin,
-            legacy,
-            story_feedback={sk: story.get("hitl_feedback", "")} if story.get("hitl_feedback") else None,
+            jira, [sk], gherkin, legacy, story_feedback=story_feedback,
         ).payload["ux_spec"]
     except LLMQuotaExceeded as e:
         patch = raise_quota_interrupt(jira, sk, e, state=state)
         if patch:
             return patch
-        spec = design_user_experience(jira, [sk], gherkin, legacy).payload["ux_spec"]
+        spec = design_user_experience(
+            jira, [sk], gherkin, legacy, story_feedback=story_feedback,
+        ).payload["ux_spec"]
 
     # Just set the flag — dispatcher/refinement_gate advances the column.
     return {
@@ -336,10 +366,13 @@ def refinement_gate_node(state: PipelineState) -> dict:
             return {
                 "stories": {
                     sk: {
+                        # Spread the repair update first; the explicit keys below must win.
+                        # readiness_repair_update may set hitl_type="refinement", which would
+                        # otherwise clobber the "intervention" interrupt actually fired here.
+                        **readiness_repair_update(errors),
                         "ready_contract": contract,
                         "refinement_retries": 0,
                         "hitl_type": "intervention",
-                        **readiness_repair_update(errors),
                     }
                 }
             }

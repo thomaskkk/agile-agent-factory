@@ -938,6 +938,41 @@ def test_correct_code_prompt_includes_test_contract_functions(tmp_path, monkeypa
     assert "test_login_invalid" in prompt, "correction prompt must include expected test functions"
 
 
+def test_correct_code_reduced_scope_retry_propagates_quota(tmp_path, monkeypatch):
+    """B1: a quota error raised inside the reduced-scope truncation retry must propagate.
+
+    Previously `except (LLMQuotaExceeded, Exception)` swallowed the quota event into a
+    ('truncated', []) strategy retry, so the pipeline never reached quota backoff/HITL.
+    """
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "a.py").write_text("# file a")
+
+    dn = _mod()
+    calls = {"n": 0}
+
+    def fake_call_llm(prompt, system="", model=None, prefill=""):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return '[{"path":'  # truncated first response
+        raise LLMQuotaExceeded("anthropic", "rate limited")  # reduced-scope retry
+
+    with (
+        patch("agile_agent_factory.nodes.dev_node.call_llm", side_effect=fake_call_llm),
+        patch("agile_agent_factory.nodes.dev_node._parse_correction_response", return_value=None),
+        patch("agile_agent_factory.nodes.dev_node._is_truncated_json", return_value=True),
+        patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path),
+    ):
+        with pytest.raises(LLMQuotaExceeded):
+            dn._correct_code("blueprint", "File 'app/a.py', line 5\nAssertionError")
+
+    assert calls["n"] == 2, "reduced-scope retry must have been attempted"
+
+
 def test_correct_code_prompt_valid_without_test_contract(tmp_path, monkeypatch):
     """Correction call with no test_contract must still produce a valid prompt (spec block omitted)."""
     import agile_agent_factory.tools.path_utils as pu
