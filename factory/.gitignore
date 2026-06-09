@@ -18,8 +18,8 @@ __pycache__/
 # Claude Code session data and local cache
 .claude/
 
-nimbalyst-local/
-
 .langgraph_api/
 
 PRD.md
+
+pipeline_checkpoint.*

@@ -229,7 +229,7 @@ def test_node(state: PipelineState) -> dict:
             if full_suite_first:
                 exit_code, output = run_pytest(deps)
                 if exit_code != 0 and write_scope:
-                    tb_files = _failing_files_in_output(output) or _failing_files_from_node_ids(output)
+                    tb_files = _regression_blocker_files(output)
                     in_scope = any(_path_in_write_scope(f, write_scope) for f in tb_files)
                     if tb_files and not in_scope:
                         log(f"Cross-story regression detected for {sk}; re-routing owners.")
@@ -253,7 +253,7 @@ def test_node(state: PipelineState) -> dict:
                     if exit_code != 0:
                         # Targeted green, full suite red — classify the regression
                         failure_class = classify_failure(exit_code, output)
-                        tb_files = _failing_files_in_output(output) or _failing_files_from_node_ids(output)
+                        tb_files = _regression_blocker_files(output)
                         in_scope = any(_path_in_write_scope(f, write_scope) for f in tb_files)
                         if in_scope:
                             # Our write-scope still has issues — keep iterating correction
@@ -551,6 +551,18 @@ def _failing_files_from_node_ids(output: str) -> list[str]:
     """
     seen = dict.fromkeys(_NODE_ID_RE.findall(output))
     return list(seen)
+
+
+def _regression_blocker_files(output: str) -> list[str]:
+    """Prefer failing test node ids over traceback paths for cross-story ownership.
+
+    Full-suite regressions frequently mention shared implementation files in the
+    traceback (for example ``app/routes.py``), even when the actual failing test
+    belongs to a different story. Node ids point at the failing test files, which
+    are the most reliable ownership signal for deciding whether to reroute a
+    regression instead of holding the current story in correction/HITL.
+    """
+    return _failing_files_from_node_ids(output) or _failing_files_in_output(output)
 
 
 def _failure_hint(failure_class: str) -> str:

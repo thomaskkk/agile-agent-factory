@@ -196,6 +196,60 @@ def test_targeted_green_full_red_out_of_scope_requeues_done_owner(monkeypatch):
     assert jira.add_comment_adf.call_count >= 2
 
 
+def test_targeted_green_full_red_prefers_failing_test_owner_over_shared_traceback(monkeypatch):
+    """A shared app traceback file must not pin the regression to the current story."""
+    tn = _tn()
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "testing",
+                "test_contract": {
+                    "test_file": "tests/test_home.py",
+                    "target_imports": ["from app.routes import index"],
+                },
+            },
+            "F1-2": {
+                "story_key": "F1-2",
+                "column": "testing",
+                "test_contract": {
+                    "test_file": "tests/test_detail.py",
+                    "target_imports": ["from app.routes import detail"],
+                },
+            },
+        },
+        "epic_keys": [],
+        "gherkin_criteria": {},
+    }
+
+    call_n = [0]
+    jira = _mock_jira()
+
+    def fake_run_pytest(extra_packages=None, test_targets=None):
+        call_n[0] += 1
+        if call_n[0] == 1:
+            return 0, "1 passed"  # targeted
+        return (
+            1,
+            "FAILED tests/test_detail.py::test_recipe_detail\n"
+            "app/routes.py:42: AssertionError",
+        )
+
+    monkeypatch.setattr(tn, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(tn, "_load_dev_context", lambda sk: "blueprint")
+    monkeypatch.setattr(tn, "resolve_dependencies", lambda *a, **kw: [])
+    monkeypatch.setattr(tn, "JiraClient", lambda: jira)
+
+    result = tn.test_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "code_review"
+    assert result["stories"]["F1-1"]["regression_blockers"] == []
+    assert "F1-2" not in result["stories"] or result["stories"]["F1-2"]["column"] == "testing"
+    assert jira.add_comment_adf.call_count >= 1
+
+
 def test_incoming_regression_runs_full_suite_before_targeted(monkeypatch):
     """Owner stories reopened for regression should skip the targeted-first fast path."""
     tn = _tn()
