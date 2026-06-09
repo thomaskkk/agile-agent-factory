@@ -282,3 +282,42 @@ def test_blueprint_task_file_includes_test_contract_section(tmp_path, monkeypatc
     assert "`tests/test_auth.py`" in content
     assert "`app/auth.py`" in content
     assert "FORBIDDEN" in content
+
+
+def test_blueprint_task_file_prefers_package_init_for_package_import(tmp_path, monkeypatch):
+    """Write scope should follow architecture contracts when an import refers to a package re-export."""
+    from agile_agent_factory.agents.tl_agent import _write_story_task
+
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
+
+    arch = {
+        "files": [
+            {"path": "app/models/__init__.py", "purpose": "model re-exports", "functions": []},
+            {"path": "app/models/recipe.py", "purpose": "recipe model", "functions": ["Recipe"]},
+            {"path": "app/repository.py", "purpose": "repository", "functions": ["RecipeRepository"]},
+        ],
+        "import_rules": "from app.<module> import <name>",
+        "test_command": "uv run pytest tests/ -v",
+        "dependencies": [],
+    }
+    ready_contract = {
+        "test_contract": {
+            "test_file": "tests/test_recipe_repository.py",
+            "test_functions": ["test_add_recipe_returns_unique_id"],
+            "target_imports": [
+                "from app.repository import RecipeRepository",
+                "from app.models import Recipe",
+            ],
+            "fixtures": [],
+            "sample_data": [],
+            "edge_cases": [],
+        }
+    }
+
+    _write_story_task("F3-755", arch, {"F3-755": ["Scenario: Repo\n  Given x\n  When y\n  Then z"]}, {}, ready_contract)
+
+    content = (tmp_path / "F3-755.md").read_text()
+    assert "`tests/test_recipe_repository.py`" in content
+    assert "`app/repository.py`" in content
+    assert "`app/models/__init__.py`" in content
+    assert "`app/models.py`" not in content

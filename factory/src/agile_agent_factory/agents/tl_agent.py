@@ -29,6 +29,47 @@ _ARCH_FALLBACK = {
 }
 
 
+def _resolve_owned_path_from_import(import_stmt: str, arch: dict) -> str | None:
+    """Resolve a target import to the architecture-owned file that should satisfy it."""
+    if not isinstance(import_stmt, str) or not import_stmt.strip():
+        return None
+
+    match = re.match(r"from (app(?:\.\w+)+) import", import_stmt)
+    if not match:
+        return None
+
+    module_path = match.group(1).replace(".", "/")
+    flat_path = module_path + ".py"
+    package_init = module_path + "/__init__.py"
+    arch_paths = {
+        file_contract.get("path")
+        for file_contract in arch.get("files", [])
+        if isinstance(file_contract, dict) and isinstance(file_contract.get("path"), str)
+    }
+
+    if package_init in arch_paths and flat_path not in arch_paths:
+        return package_init
+    if flat_path in arch_paths:
+        return flat_path
+    if package_init in arch_paths:
+        return package_init
+    return flat_path
+
+
+def _write_scope_paths_from_test_contract(arch: dict, tc: dict) -> list[str]:
+    """Build strict write-scope paths from the test contract plus architecture contracts."""
+    paths: list[str] = []
+
+    def add(path: str | None) -> None:
+        if isinstance(path, str) and path not in paths:
+            paths.append(path)
+
+    add(tc.get("test_file"))
+    for import_stmt in tc.get("target_imports", []) or []:
+        add(_resolve_owned_path_from_import(import_stmt, arch))
+    return paths
+
+
 def _transition_all(jira: JiraClient, keys: list[str], target: WorkflowState) -> None:
     for key in keys:
         try:
@@ -194,20 +235,13 @@ def _write_story_task(
         )
         edge_block = "\n".join(f"- {e}" for e in tc_edge_cases) or "(none)"
 
-        # Derive allowed app file paths from target_imports
-        _allowed_app_files = []
-        for imp in tc_imports:
-            m = re.match(r"from (app(?:\.\w+)+) import", imp)
-            if m:
-                path_str = m.group(1).replace(".", "/") + ".py"
-                if path_str not in _allowed_app_files:
-                    _allowed_app_files.append(path_str)
-
+        write_scope_paths = _write_scope_paths_from_test_contract(arch, tc)
         _write_scope_lines = []
-        if tc_test_file:
-            _write_scope_lines.append(f"- `{tc_test_file}` (test file — create or overwrite)")
-        for p in _allowed_app_files:
-            _write_scope_lines.append(f"- `{p}` (derived from target imports)")
+        for path_str in write_scope_paths:
+            if path_str == tc_test_file:
+                _write_scope_lines.append(f"- `{path_str}` (test file — create or overwrite)")
+            else:
+                _write_scope_lines.append(f"- `{path_str}` (derived from target imports)")
         write_scope_block = "\n".join(_write_scope_lines) if _write_scope_lines else "- (no specific scope — follow architecture file contracts)"
 
         test_contract_section = f"""

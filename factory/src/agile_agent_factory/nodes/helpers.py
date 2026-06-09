@@ -6,6 +6,7 @@ dev/test/review node modules. They contain no node entrypoints themselves.
 
 from __future__ import annotations
 
+import ast
 import re
 import time
 from pathlib import Path
@@ -93,13 +94,32 @@ def _story_summary(jira: JiraClient, story_key: str) -> str:
         return ""
 
 
-def _module_path_from_import(import_stmt: str) -> str | None:
+def _module_path_from_import(
+    import_stmt: str,
+    *,
+    architecture_paths: list[str] | None = None,
+    product_root: Path | None = None,
+) -> str | None:
     if not isinstance(import_stmt, str) or not import_stmt.strip():
         return None
     match = re.match(r"from (app(?:\.\w+)+) import", import_stmt)
     if not match:
         return None
-    return match.group(1).replace(".", "/") + ".py"
+    module_path = match.group(1).replace(".", "/")
+    flat_path = module_path + ".py"
+    package_init = module_path + "/__init__.py"
+
+    architecture_paths = architecture_paths or []
+    if package_init in architecture_paths and flat_path not in architecture_paths:
+        return package_init
+
+    if product_root is not None:
+        package_init_path = product_root / package_init
+        flat_path_path = product_root / flat_path
+        if package_init_path.exists() and not flat_path_path.exists():
+            return package_init
+
+    return flat_path
 
 
 def _task_file_contract_paths(story_key: str) -> list[str]:
@@ -153,10 +173,41 @@ def _write_scope_hints_from_test_contract(story: dict, product_root: Path) -> li
     except OSError:
         return list(seen.keys())
 
-    for hint in re.findall(r"\b(?:app|tests)/[A-Za-z0-9_./-]+\b", source):
+    for hint in _literal_path_hints_from_source(source):
         seen.setdefault(hint, None)
-    for hint in re.findall(r"\b(?:README(?:\.[A-Za-z0-9]+)?|requirements\.txt|pyproject\.toml)\b", source):
-        seen.setdefault(hint, None)
+
+    return list(seen.keys())
+
+
+def _literal_path_hints_from_source(source: str) -> list[str]:
+    """Extract scope hints from exact string literals, not prose/docstrings.
+
+    This prevents docstring mentions like "README" from widening a story's
+    write_scope, while still allowing explicit literals such as
+    ``"README.md"`` or ``"app/routes"`` in scaffold/setup tests.
+    """
+    seen: dict[str, None] = {}
+    path_pattern = re.compile(r"^(?:app|tests)/[A-Za-z0-9_./-]+$")
+    root_pattern = re.compile(r"^(?:README(?:\.[A-Za-z0-9]+)?|requirements\.txt|pyproject\.toml)$")
+
+    def add_if_relevant(value: str) -> None:
+        cleaned = value.strip()
+        if path_pattern.fullmatch(cleaned) or root_pattern.fullmatch(cleaned):
+            seen.setdefault(cleaned, None)
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        for match in re.findall(
+            r"""['"]((?:app|tests)/[A-Za-z0-9_./-]+|README(?:\.[A-Za-z0-9]+)?|requirements\.txt|pyproject\.toml)['"]""",
+            source,
+        ):
+            add_if_relevant(match)
+        return list(seen.keys())
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            add_if_relevant(node.value)
 
     return list(seen.keys())
 
@@ -182,11 +233,17 @@ def derive_story_write_scope(
         if isinstance(path, str) and path.strip() and path not in scope:
             scope.append(path)
 
+    architecture_paths = _task_file_contract_paths(story_key)
     add(tc.get("test_file"))
     for import_stmt in tc.get("target_imports", []) or []:
-        add(_module_path_from_import(import_stmt))
+        add(
+            _module_path_from_import(
+                import_stmt,
+                architecture_paths=architecture_paths,
+                product_root=product_root,
+            )
+        )
 
-    architecture_paths = _task_file_contract_paths(story_key)
     for scoped_path in list(scope):
         path_obj = Path(scoped_path)
         for parent in path_obj.parents:

@@ -554,6 +554,94 @@ Scenario: Web server starts on configured port
     assert "requirements.txt" in scope
 
 
+def test_derive_story_write_scope_prefers_package_init_for_package_import(tmp_path):
+    """Package imports should resolve to __init__.py when the story architecture owns a package."""
+    import importlib
+    from unittest.mock import patch
+
+    helpers = importlib.import_module("agile_agent_factory.nodes.helpers")
+
+    product_root = tmp_path / "product"
+    task_path = tmp_path / "F3-755.md"
+    task_path.write_text(
+        """
+### File Contracts
+- `app/models/__init__.py`: Re-export Recipe
+- `app/models/recipe.py`: Recipe model
+- `app/repository.py`: Repository
+- `tests/test_recipe_repository.py`: Repository tests
+"""
+    )
+
+    story = {
+        "story_key": "F3-755",
+        "test_contract": {
+            "test_file": "tests/test_recipe_repository.py",
+            "target_imports": [
+                "from app.repository import RecipeRepository",
+                "from app.models import Recipe",
+            ],
+        },
+    }
+
+    with patch("agile_agent_factory.nodes.helpers.bp_task_path", return_value=task_path):
+        scope = helpers.derive_story_write_scope("F3-755", story, product_root=product_root)
+
+    assert "tests/test_recipe_repository.py" in scope
+    assert "app/repository.py" in scope
+    assert "app/models/__init__.py" in scope
+    assert "app/models.py" not in scope
+
+
+def test_derive_story_write_scope_ignores_readme_mentions_in_test_docstrings(tmp_path):
+    """Test prose mentioning README must not widen write_scope to README.md."""
+    import importlib
+    from unittest.mock import patch
+
+    helpers = importlib.import_module("agile_agent_factory.nodes.helpers")
+
+    product_root = tmp_path / "product"
+    (product_root / "tests").mkdir(parents=True)
+    (product_root / "tests" / "test_web_server.py").write_text(
+        '''
+"""Tests for the Flask web server."""
+
+from app.application import create_app
+
+
+def test_readme_documents_setup():
+    """README or application module documents setup instructions."""
+    assert callable(create_app)
+'''
+    )
+
+    task_path = tmp_path / "F3-757.md"
+    task_path.write_text(
+        """
+### File Contracts
+- `app/application.py`: Flask application factory
+- `app.py`: Entry point
+- `tests/test_web_server.py`: Web server tests
+- `README.md`: Project documentation
+"""
+    )
+
+    story = {
+        "story_key": "F3-757",
+        "test_contract": {
+            "test_file": "tests/test_web_server.py",
+            "target_imports": ["from app.application import create_app"],
+        },
+    }
+
+    with patch("agile_agent_factory.nodes.helpers.bp_task_path", return_value=task_path):
+        scope = helpers.derive_story_write_scope("F3-757", story, product_root=product_root)
+
+    assert "tests/test_web_server.py" in scope
+    assert "app/application.py" in scope
+    assert "README.md" not in scope
+
+
 def test_dev_node_expands_scaffold_write_scope_from_architecture(tmp_path, monkeypatch):
     """dev_node should pass scaffold-owned architecture files into the guarded generation scope."""
     import agile_agent_factory.tools.path_utils as pu
