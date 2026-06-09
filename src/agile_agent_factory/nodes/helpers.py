@@ -6,13 +6,17 @@ dev/test/review node modules. They contain no node entrypoints themselves.
 
 from __future__ import annotations
 
+import re
 import time
+from pathlib import Path
 
 from langgraph.types import interrupt
 
+from agile_agent_factory.config import PRODUCT_ROOT, bp_task_path
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.path_utils import ROOT_WRITE_ALLOWLIST
 from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
 
@@ -86,6 +90,207 @@ def _story_summary(jira: JiraClient, story_key: str) -> str:
     except Exception as e:
         log(f"Could not fetch story summary for {story_key}: {e}")
         return ""
+
+
+def _module_path_from_import(import_stmt: str) -> str | None:
+    if not isinstance(import_stmt, str) or not import_stmt.strip():
+        return None
+    match = re.match(r"from (app(?:\.\w+)+) import", import_stmt)
+    if not match:
+        return None
+    return match.group(1).replace(".", "/") + ".py"
+
+
+def _task_file_contract_paths(story_key: str) -> list[str]:
+    task_path = bp_task_path(story_key)
+    if not task_path.exists():
+        return []
+    seen: dict[str, None] = {}
+    for match in re.finditer(r"^- `([^`]+)`:", task_path.read_text(encoding="utf-8"), re.MULTILINE):
+        seen.setdefault(match.group(1).strip(), None)
+    return list(seen.keys())
+
+
+def _write_scope_hints_from_story_task(story_key: str) -> list[str]:
+    task_path = bp_task_path(story_key)
+    if not task_path.exists():
+        return []
+    text = task_path.read_text(encoding="utf-8")
+    hints: dict[str, None] = {}
+    if "uvicorn main:app" in text:
+        hints["main.py"] = None
+    if "uvicorn app:app" in text:
+        hints["app.py"] = None
+    if "uvicorn wsgi:app" in text:
+        hints["wsgi.py"] = None
+    return list(hints.keys())
+
+
+def _write_scope_hints_from_test_contract(story: dict, product_root: Path) -> list[str]:
+    tc = story.get("test_contract", {}) or {}
+    seen: dict[str, None] = {}
+
+    for sample in tc.get("sample_data", []) or []:
+        if isinstance(sample, dict):
+            directory = sample.get("directory")
+            if isinstance(directory, str) and directory.strip():
+                seen.setdefault(directory.strip(), None)
+            file_path = sample.get("file")
+            if isinstance(file_path, str) and file_path.strip():
+                seen.setdefault(file_path.strip(), None)
+
+    test_file_rel = tc.get("test_file", "")
+    if not test_file_rel:
+        return list(seen.keys())
+
+    test_file_path = product_root / test_file_rel
+    if not test_file_path.exists():
+        return list(seen.keys())
+
+    try:
+        source = test_file_path.read_text(encoding="utf-8")
+    except OSError:
+        return list(seen.keys())
+
+    for hint in re.findall(r"\b(?:app|tests)/[A-Za-z0-9_./-]+\b", source):
+        seen.setdefault(hint, None)
+    for hint in re.findall(r"\b(?:README(?:\.[A-Za-z0-9]+)?|requirements\.txt|pyproject\.toml)\b", source):
+        seen.setdefault(hint, None)
+
+    return list(seen.keys())
+
+
+def derive_story_write_scope(
+    story_key: str,
+    story: dict,
+    product_root: Path | None = None,
+) -> list[str]:
+    """Build an exact file-level write scope from test contracts plus architecture hints.
+
+    Base scope comes from the QA test contract (test file + target imports). For
+    scaffold/setup stories that assert directory or root-file structure, expand the
+    scope with directory-prefix allowances and explicit root-file hints so the story
+    can satisfy its own validated readiness contract without implicitly requiring
+    every architecture file in that directory to exist already.
+    """
+    product_root = product_root or PRODUCT_ROOT
+    tc = story.get("test_contract", {}) or {}
+    scope: list[str] = []
+
+    def add(path: str | None) -> None:
+        if isinstance(path, str) and path.strip() and path not in scope:
+            scope.append(path)
+
+    add(tc.get("test_file"))
+    for import_stmt in tc.get("target_imports", []) or []:
+        add(_module_path_from_import(import_stmt))
+
+    architecture_paths = _task_file_contract_paths(story_key)
+    for scoped_path in list(scope):
+        path_obj = Path(scoped_path)
+        for parent in path_obj.parents:
+            parent_str = parent.as_posix()
+            if parent_str in {".", ""}:
+                break
+            init_path = f"{parent_str}/__init__.py"
+            if init_path in architecture_paths:
+                add(init_path)
+
+    hints = _write_scope_hints_from_test_contract(story, product_root)
+    for task_hint in _write_scope_hints_from_story_task(story_key):
+        add(task_hint)
+    for hint in hints:
+        normalized = hint.strip().lstrip("./")
+        if not normalized:
+            continue
+        if normalized in architecture_paths:
+            add(normalized)
+            continue
+        if normalized.startswith("README"):
+            for arch_path in architecture_paths:
+                if arch_path.startswith("README"):
+                    add(arch_path)
+            continue
+
+        name = Path(normalized).name
+        if "." in name:
+            if normalized.startswith(("app/", "tests/")):
+                add(normalized)
+            continue
+
+        if normalized.startswith(("app/", "tests/")):
+            add(normalized.rstrip("/") + "/")
+
+    return scope
+
+
+def _snapshot_product_files() -> dict[str, bytes]:
+    """Capture app/, tests/, and tracked root files so node-level generators can validate and roll back writes."""
+    snapshot: dict[str, bytes] = {}
+    for target_dir in ("app", "tests"):
+        root = PRODUCT_ROOT / target_dir
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file():
+                snapshot[str(path.relative_to(PRODUCT_ROOT))] = path.read_bytes()
+    for root_name in ROOT_WRITE_ALLOWLIST:
+        path = PRODUCT_ROOT / root_name
+        if path.exists() and path.is_file():
+            snapshot[str(path.relative_to(PRODUCT_ROOT))] = path.read_bytes()
+    return snapshot
+
+
+def _changed_product_files(before: dict[str, bytes]) -> list[str]:
+    current = _snapshot_product_files()
+    changed: list[str] = []
+    for rel_path in sorted(set(before) | set(current)):
+        if before.get(rel_path) != current.get(rel_path):
+            changed.append(rel_path)
+    return changed
+
+
+def _restore_product_files(before: dict[str, bytes], paths: list[str]) -> None:
+    for rel_path in paths:
+        target = PRODUCT_ROOT / rel_path
+        original = before.get(rel_path)
+        if original is None:
+            if target.exists():
+                target.unlink()
+                _prune_empty_dirs(target.parent)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(original)
+
+
+def _path_in_write_scope(path: str, write_scope: list[str] | None) -> bool:
+    if not write_scope:
+        return True
+    for entry in write_scope:
+        if entry.endswith("/"):
+            if path.startswith(entry):
+                return True
+        elif path == entry:
+            return True
+    return False
+
+
+def _write_scope_violations(changed_files: list[str], write_scope: list[str] | None) -> list[str]:
+    if not write_scope:
+        return []
+    return [path for path in changed_files if not _path_in_write_scope(path, write_scope)]
+
+
+def _prune_empty_dirs(start: Path) -> None:
+    stop_dirs = {PRODUCT_ROOT, PRODUCT_ROOT / "app", PRODUCT_ROOT / "tests"}
+    for parent in (start, *start.parents):
+        if parent in stop_dirs:
+            break
+        try:
+            parent.rmdir()
+        except OSError:
+            break
 
 
 def raise_quota_interrupt(

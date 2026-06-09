@@ -46,14 +46,14 @@ def test_reject_absolute_path(monkeypatch, tmp_path):
 def test_reject_path_outside_app_or_tests(monkeypatch, tmp_path):
     import agile_agent_factory.tools.path_utils as path_utils
     monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
-    with pytest.raises(ValueError, match="outside app/ or tests/"):
+    with pytest.raises(ValueError, match="outside allowed story paths"):
         path_utils.normalize_generated_path("config.py")
 
 
 def test_reject_embedded_dotdot_traversal(monkeypatch, tmp_path):
     import agile_agent_factory.tools.path_utils as path_utils
     monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
-    with pytest.raises(ValueError, match="outside app/ or tests/"):
+    with pytest.raises(ValueError, match="outside allowed story paths"):
         path_utils.normalize_generated_path("app/../../../etc/passwd")
 
 
@@ -72,6 +72,32 @@ def test_normalize_strips_hallucinated_project_prefix_tests(monkeypatch, tmp_pat
     (tmp_path / "tests").mkdir()
     result = path_utils.normalize_generated_path("Factory_project_claude/tests/test_recipes_list.py")
     assert result == tmp_path / "tests/test_recipes_list.py"
+
+
+def test_normalize_root_readme_when_explicitly_allowed(monkeypatch, tmp_path):
+    import agile_agent_factory.tools.path_utils as path_utils
+    monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
+    assert path_utils.normalize_generated_path(
+        "README.md",
+        allowed_root_paths=["README.md"],
+    ) == tmp_path / "README.md"
+
+
+def test_normalize_root_main_with_hallucinated_prefix_when_allowed(monkeypatch, tmp_path):
+    import agile_agent_factory.tools.path_utils as path_utils
+    monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
+    result = path_utils.normalize_generated_path(
+        "Factory_project_claude/main.py",
+        allowed_root_paths=["main.py"],
+    )
+    assert result == tmp_path / "main.py"
+
+
+def test_reject_root_file_when_not_explicitly_allowed(monkeypatch, tmp_path):
+    import agile_agent_factory.tools.path_utils as path_utils
+    monkeypatch.setattr(path_utils, "PARENT_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="outside allowed story paths"):
+        path_utils.normalize_generated_path("README.md")
 
 
 def test_collision_guard_package_removes_shadow(tmp_path):

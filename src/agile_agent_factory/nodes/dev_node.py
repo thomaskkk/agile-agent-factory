@@ -12,13 +12,23 @@ import re
 from pathlib import Path
 
 from agile_agent_factory.config import PRODUCT_ROOT, DEV_MODEL, LLM_MAX_TOKENS, bp_task_path
-from agile_agent_factory.tools.jira_client import JiraClient
+from agile_agent_factory.tools.jira_client import JiraClient, make_adf_doc
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded, call_llm, call_llm_json
 from agile_agent_factory.tools.logger import log
-from agile_agent_factory.tools.path_utils import normalize_generated_path, resolve_namespace_collision
+from agile_agent_factory.tools.path_utils import ROOT_WRITE_ALLOWLIST, normalize_generated_path, resolve_namespace_collision
 from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
-from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
+from agile_agent_factory.nodes.helpers import (
+    _active_story,
+    _changed_product_files,
+    _path_in_write_scope,
+    derive_story_write_scope,
+    _restore_product_files,
+    _safe_transition,
+    _snapshot_product_files,
+    _write_scope_violations,
+    raise_quota_interrupt,
+)
 
 _FILE_FALLBACK = [
     {"path": "app/__init__.py", "content": ""},
@@ -31,24 +41,140 @@ def _load_dev_context(story_key: str) -> str:
     return task_path.read_text() if task_path.exists() else ""
 
 
+def _guard_generation_writes(
+    before_snapshot: dict[str, bytes],
+    write_scope: list[str] | None,
+    *,
+    rollback_all: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Return (changed_files, violations); roll back when a generator strays out of scope."""
+    changed = _changed_product_files(before_snapshot)
+    violations = _write_scope_violations(changed, write_scope)
+    if violations:
+        _restore_product_files(before_snapshot, changed if rollback_all else violations)
+        log("Generation wrote outside write_scope; rolled back: " + ", ".join(violations))
+        return _changed_product_files(before_snapshot), violations
+    return changed, []
+
+
 def _write_generated_files(files: list, write_scope: list[str] | None = None) -> list[str]:
     written: list[str] = []
     for f in files:
+        if not isinstance(f, dict):
+            log(f"Skipped malformed generated entry of type {type(f).__name__}.")
+            continue
         path_str = f.get("path", "")
-        if write_scope and path_str not in write_scope:
+        if write_scope and not _path_in_write_scope(path_str, write_scope):
             log(f"Dev: skipping out-of-scope write: {path_str} (not in write_scope)")
             continue
         try:
-            target = normalize_generated_path(path_str)
+            target = normalize_generated_path(path_str, allowed_root_paths=write_scope)
             target.parent.mkdir(parents=True, exist_ok=True)
             if not resolve_namespace_collision(target):
                 continue
-            target.write_text(f.get("content", ""))
+            new_content = f.get("content", "")
+            if target.exists() and target.is_file():
+                try:
+                    current_content = target.read_text(encoding="utf-8")
+                except OSError:
+                    current_content = None
+                if current_content == new_content:
+                    log(f"Skipped unchanged generated file: {path_str}")
+                    continue
+            target.write_text(new_content, encoding="utf-8")
             log(f"Wrote: {target}")
             written.append(path_str)
         except (ValueError, KeyError) as e:
             log(f"Skipped invalid path {f.get('path', '?')}: {e}")
     return written
+
+
+def _normalize_generation_payload(payload) -> list[dict]:
+    """Coerce LLM JSON output into a list of file dicts, skipping malformed entries."""
+    if isinstance(payload, dict):
+        if "files" in payload and isinstance(payload["files"], list):
+            payload = payload["files"]
+        else:
+            payload = [payload]
+
+    if not isinstance(payload, list):
+        log(f"LLM generation returned unsupported JSON shape: {type(payload).__name__}")
+        return []
+
+    normalized = [entry for entry in payload if isinstance(entry, dict)]
+    skipped = len(payload) - len(normalized)
+    if skipped:
+        log(f"LLM generation skipped {skipped} malformed file entr{'' if skipped == 1 else 'ies'}.")
+    return normalized
+
+
+def _build_write_scope_file_context(write_scope: list[str] | None) -> str:
+    """Return existing exact-scope file contents to help rework prompts modify the right file."""
+    if not write_scope:
+        return ""
+
+    sections: list[str] = []
+    for scoped_path in write_scope:
+        if scoped_path.endswith("/"):
+            continue
+        rel_path = scoped_path.strip().lstrip("./")
+        if not rel_path:
+            continue
+        if "/" not in rel_path and rel_path not in ROOT_WRITE_ALLOWLIST:
+            continue
+        target = PRODUCT_ROOT / rel_path
+        if not target.exists() or not target.is_file():
+            continue
+        try:
+            content = target.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        suffix = target.suffix.lstrip(".")
+        fence_lang = suffix if suffix else "text"
+        sections.append(f"### {rel_path}\n```{fence_lang}\n{content[:8000]}\n```")
+
+    if not sections:
+        return ""
+    return "\n\nCurrent write-scope files:\n" + "\n\n".join(sections[:12]) + "\n"
+
+
+def _should_try_readme_rework_fallback(review_feedback: str, write_scope: list[str] | None) -> bool:
+    if not review_feedback or not write_scope or "README.md" not in write_scope:
+        return False
+    return bool(re.search(r"\bREADME\b|\bsetup\b|\bstartup\b|\brun\b|\binstall", review_feedback, re.IGNORECASE))
+
+
+def _augment_noop_rework_feedback(review_feedback: str, write_scope: list[str] | None) -> str:
+    scope_note = f"Owned write scope: {', '.join(write_scope)}." if write_scope else ""
+    return (
+        f"{review_feedback}\n\n"
+        "Factory note: the previous rework attempt produced no material file changes. "
+        "You MUST materially change at least one file in the owned write scope. "
+        "Returning identical content counts as failure.\n"
+        f"{scope_note}"
+    ).strip()
+
+
+def _generate_readme_rework_guarded(write_scope: list[str] | None) -> list[str]:
+    """Regenerate README as a targeted fallback for README-only review loops."""
+    from agile_agent_factory.agents.readme_agent import generate_readme
+
+    before_snapshot = _snapshot_product_files()
+    generate_readme({})
+    changed_files, violations = _guard_generation_writes(
+        before_snapshot,
+        write_scope,
+        rollback_all=False,
+    )
+    if violations:
+        if changed_files:
+            log(
+                "README fallback exceeded write_scope; kept in-scope files after rollback: "
+                + ", ".join(changed_files)
+            )
+        else:
+            log("README fallback produced no in-scope files after write_scope rollback.")
+    return changed_files
 
 
 def _generate_code_with_llm(
@@ -58,6 +184,7 @@ def _generate_code_with_llm(
     model: str | None = None,
 ) -> None:
     if review_feedback:
+        current_files_block = _build_write_scope_file_context(write_scope)
         scope_instruction = ""
         if write_scope:
             scope_instruction = (
@@ -69,7 +196,10 @@ def _generate_code_with_llm(
             "You are a senior Python developer fixing a code review rejection. "
             "Return a JSON list of ONLY the files that must change to fix the rejection. "
             "Make minimal targeted changes. Do NOT rewrite unrelated files. "
-            "Use only paths starting with app/ or tests/. "
+            "Use only paths that are explicitly listed in the write scope. "
+            "Those paths may be under app/, under tests/, or product-root files such as "
+            "README.md, requirements.txt, pyproject.toml, main.py, app.py, or wsgi.py "
+            "when those exact files appear in scope. "
             "Never use absolute paths or nested app/app/ paths."
         )
         prompt = f"""Fix the following code review rejection. Return JSON only — only the files that must change:
@@ -81,13 +211,17 @@ def _generate_code_with_llm(
 Reviewer rejection (you MUST fix this):
 {review_feedback}
 {scope_instruction}
+{current_files_block}
 Architecture context (read-only — do not re-implement from scratch):
 {blueprint}
 """
     else:
         system = (
             "You are a senior Python developer implementing a feature from a technical blueprint. "
-            "Return a JSON list of files to write. Use only paths starting with app/ or tests/. "
+            "Return a JSON list of files to write. Use only paths that are explicitly listed "
+            "in the write scope. Those paths may be under app/, under tests/, or product-root "
+            "files such as README.md, requirements.txt, pyproject.toml, main.py, app.py, or "
+            "wsgi.py when those exact files appear in scope. "
             "Never use absolute paths or nested app/app/ paths."
         )
         scope_instruction = (
@@ -104,8 +238,43 @@ Architecture context (read-only — do not re-implement from scratch):
 Blueprint:
 {blueprint}
 """
-    files = call_llm_json(prompt, system=system, fallback=_FILE_FALLBACK, model=model)
+    payload = call_llm_json(prompt, system=system, fallback=_FILE_FALLBACK, model=model)
+    files = _normalize_generation_payload(payload)
+    if not files:
+        log("LLM generation returned no usable file entries — no files written.")
+        return
     _write_generated_files(files, write_scope=write_scope)
+
+
+def _generate_code_with_llm_guarded(
+    blueprint: str,
+    review_feedback: str = "",
+    write_scope: list[str] | None = None,
+    model: str | None = None,
+) -> list[str]:
+    """Run LLM generation and keep only in-scope filesystem effects."""
+    before_snapshot = _snapshot_product_files()
+    _generate_code_with_llm(
+        blueprint,
+        review_feedback=review_feedback,
+        write_scope=write_scope,
+        model=model,
+    )
+    changed_files, violations = _guard_generation_writes(
+        before_snapshot,
+        write_scope,
+        rollback_all=False,
+    )
+    if violations:
+        if changed_files:
+            log(
+                "LLM-direct generation exceeded write_scope; "
+                "kept in-scope files after rollback: "
+                + ", ".join(changed_files)
+            )
+        else:
+            log("LLM-direct generation produced no in-scope files after write_scope rollback.")
+    return changed_files
 
 
 def _is_truncated_json(raw: str) -> bool:
@@ -318,6 +487,8 @@ def _extract_error_summary(output: str) -> str:
 
 def dev_node(state: PipelineState) -> dict:
     """Developer agent: generate code for ONE story."""
+    from langgraph.types import interrupt
+
     jira = JiraClient()
     sk, story = _active_story(state)
     log(f"Dev: generating code for {sk}.")
@@ -333,36 +504,61 @@ def dev_node(state: PipelineState) -> dict:
 
     blueprint = _load_dev_context(sk)
     review_feedback = story.get("review_rejection_reason", "")
+    human_feedback = story.get("hitl_feedback", "")
+    effective_review_feedback = review_feedback
+    if human_feedback:
+        effective_review_feedback = (
+            f"{effective_review_feedback}\n\nHuman feedback after HITL:\n{human_feedback}".strip()
+            if effective_review_feedback
+            else f"Human feedback after HITL:\n{human_feedback}"
+        )
+    changed_files: list[str] = []
 
-    # Derive write_scope from test_contract for both initial gen and rework
-    tc = story.get("test_contract", {})
-    write_scope: list[str] = []
-    if tc:
-        if tc.get("test_file"):
-            write_scope.append(tc["test_file"])
-        for imp in (tc.get("target_imports") or []):
-            if isinstance(imp, str) and imp.strip():
-                m = re.match(r"from (app(?:\.\w+)+) import", imp)
-                if m:
-                    path_str = m.group(1).replace(".", "/") + ".py"
-                    if path_str not in write_scope:
-                        write_scope.append(path_str)
+    write_scope = derive_story_write_scope(sk, story)
 
     try:
         from agile_agent_factory.tools.aider_client import is_available, run_task
-        if is_available():
+        aider_available = is_available()
+        if aider_available and write_scope:
+            log("Aider available but bypassed because strict write_scope must be enforced.")
+        if aider_available and not write_scope:
             log("Using aider for code generation.")
-            run_task(
+            before_snapshot = _snapshot_product_files()
+            aider_result = run_task(
                 "Implement the product described in the blueprint. "
                 "Write code to app/ and tests to tests/.",
                 blueprint,
-                review_feedback=review_feedback,
+                review_feedback=effective_review_feedback,
+                write_scope=write_scope or None,
             )
+            changed_files, violations = _guard_generation_writes(
+                before_snapshot,
+                write_scope or None,
+                rollback_all=not aider_result.get("success", False),
+            )
+            if not aider_result.get("success", False):
+                if changed_files:
+                    _restore_product_files(before_snapshot, changed_files)
+                log("Aider failed — falling back to LLM-direct code generation.")
+                changed_files = _generate_code_with_llm_guarded(
+                    blueprint,
+                    review_feedback=effective_review_feedback,
+                    write_scope=write_scope or None,
+                    model=DEV_MODEL or None,
+                )
+            elif violations:
+                log("Aider violated ownership boundaries — retrying with LLM-direct generation.")
+                changed_files = _generate_code_with_llm_guarded(
+                    blueprint,
+                    review_feedback=effective_review_feedback,
+                    write_scope=write_scope or None,
+                    model=DEV_MODEL or None,
+                )
         else:
-            log("Aider unavailable — using LLM-direct code generation.")
-            _generate_code_with_llm(
+            log("Using LLM-direct code generation.")
+            changed_files = _generate_code_with_llm_guarded(
                 blueprint,
-                review_feedback=review_feedback,
+                review_feedback=effective_review_feedback,
                 write_scope=write_scope or None,
                 model=DEV_MODEL or None,
             )
@@ -372,12 +568,57 @@ def dev_node(state: PipelineState) -> dict:
             return patch
 
     if is_rework:
+        if not changed_files:
+            log(f"Dev: rework for {sk} produced no material changes.")
+            if _should_try_readme_rework_fallback(effective_review_feedback, write_scope or None):
+                log("Dev: retrying rework with README fallback.")
+                changed_files = _generate_readme_rework_guarded(write_scope or None)
+            if not changed_files:
+                log("Dev: retrying rework with stronger no-op instructions.")
+                changed_files = _generate_code_with_llm_guarded(
+                    blueprint,
+                    review_feedback=_augment_noop_rework_feedback(
+                        effective_review_feedback or review_feedback,
+                        write_scope or None,
+                    ),
+                    write_scope=write_scope or None,
+                    model=DEV_MODEL or None,
+                )
+            if not changed_files:
+                summary = (
+                    "Developer rework HITL: automated rework produced no material file changes "
+                    "after multiple attempts.\n\n"
+                    f"Latest review rejection:\n\n{review_feedback or '(no rejection reason provided)'}"
+                )
+                if human_feedback:
+                    summary += f"\n\nLatest human feedback:\n\n{human_feedback}"
+                jira.add_comment_adf(sk, make_adf_doc(summary))
+                jira.set_flag(sk)
+                interrupt({"type": "intervention", "blocking_key": sk, "source": "dev_noop_rework"})
+                return {
+                    "stories": {sk: {
+                        "review_status": "rework_needed",
+                        "review_rejection_reason": review_feedback,
+                        "last_changed_files": [],
+                        "hitl_type": "intervention",
+                    }},
+                }
         return {
             "stories": {sk: {
                 "review_status": "pending_review",
                 "review_rejection_reason": "",
+                "hitl_feedback": "",
+                "last_changed_files": changed_files,
             }},
         }
     return {
-        "stories": {sk: {"column": "testing", "retries": 0, "correction_failures": 0}},
+        "stories": {sk: {
+            "column": "testing",
+            "retries": 0,
+            "correction_failures": 0,
+            "failure_streak": 0,
+            "last_failure_signature": "",
+            "last_failure_class": "",
+            "last_changed_files": changed_files,
+        }},
     }

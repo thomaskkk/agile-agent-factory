@@ -3,11 +3,39 @@ from pathlib import Path
 
 from agile_agent_factory.config import PRODUCT_ROOT as PARENT_ROOT
 
+ROOT_WRITE_ALLOWLIST = {
+    "README",
+    "README.md",
+    "README.rst",
+    "README.txt",
+    "requirements.txt",
+    "pyproject.toml",
+    "main.py",
+    "app.py",
+    "wsgi.py",
+}
 
-def normalize_generated_path(raw_path: str) -> Path:
+
+def _allowed_root_targets(allowed_root_paths: list[str] | None) -> set[Path]:
+    targets: set[Path] = set()
+    for entry in allowed_root_paths or []:
+        if not isinstance(entry, str):
+            continue
+        cleaned = entry.strip().lstrip("./")
+        if not cleaned or cleaned.endswith("/"):
+            continue
+        if "/" in cleaned:
+            continue
+        if cleaned not in ROOT_WRITE_ALLOWLIST:
+            continue
+        targets.add((PARENT_ROOT / cleaned).resolve())
+    return targets
+
+
+def normalize_generated_path(raw_path: str, allowed_root_paths: list[str] | None = None) -> Path:
     """
-    Converts an AI-generated path to an absolute path under PARENT_ROOT/app/ or PARENT_ROOT/tests/.
-    Rejects absolute paths and anything that resolves outside the two allowed directories.
+    Converts an AI-generated path to an absolute path under PARENT_ROOT/app/, PARENT_ROOT/tests/,
+    or an explicitly allowed product-root file.
     """
     p = raw_path.strip()
 
@@ -28,13 +56,19 @@ def normalize_generated_path(raw_path: str) -> Path:
         if part in ("app", "tests"):
             p = str(Path(*parts[i:]))
             break
+    else:
+        if parts:
+            tail = parts[-1]
+            if tail in ROOT_WRITE_ALLOWLIST:
+                p = tail
 
     result = (PARENT_ROOT / p).resolve()
 
     allowed = [(PARENT_ROOT / "app").resolve(), (PARENT_ROOT / "tests").resolve()]
-    if not any(str(result).startswith(str(d) + "/") or result == d for d in allowed):
+    allowed_roots = _allowed_root_targets(allowed_root_paths)
+    if not any(str(result).startswith(str(d) + "/") or result == d for d in allowed) and result not in allowed_roots:
         raise ValueError(
-            f"Path '{raw_path}' resolves outside app/ or tests/: {result}"
+            f"Path '{raw_path}' resolves outside allowed story paths: {result}"
         )
 
     return result

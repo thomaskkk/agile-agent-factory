@@ -167,23 +167,27 @@ def _post_assumption_ledger(jira: JiraClient, issue_key: str, assumptions: list)
 
 def _handle_upstream_hitl(jira: JiraClient, ambiguity: str, state: dict) -> dict:
     log(f"Upstream HITL triggered: {ambiguity}")
-    placeholder = jira.create_issue(
-        "HITL: Business Requirements Need Clarification",
-        "Story",
-        description_adf=make_adf_doc(f"Ambiguity detected:\n{ambiguity}"),
-    )
+    blocking_key = state.get("blocking_issue_key")
+    if not blocking_key:
+        placeholder = jira.create_issue(
+            "HITL: Business Requirements Need Clarification",
+            "Story",
+            description_adf=make_adf_doc(f"Ambiguity detected:\n{ambiguity}"),
+        )
+        blocking_key = placeholder["key"]
+
     JiraFacade(jira).flag_for_human(
-        placeholder["key"],
+        blocking_key,
         make_adf_mention_doc(
             JIRA_HUMAN_ACCOUNT_ID,
             f"Your input is required to resolve this ambiguity: {ambiguity}",
         ),
     )
-    log(f"HITL triggered. Blocking: {placeholder['key']}")
+    log(f"HITL triggered. Blocking: {blocking_key}")
     return {
         **state,
         "status": "AWAITING_HUMAN_REFINEMENT",
         "current_phase": "upstream_hitl",
-        "blocking_issue_key": placeholder["key"],
+        "blocking_issue_key": blocking_key,
         "hitl_required": True,
     }

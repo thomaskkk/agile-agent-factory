@@ -127,6 +127,56 @@ def test_append_adf_doc_empty_existing():
     assert "Acceptance Criteria" in result["content"][0]["content"][0]["text"]
 
 
+def test_upsert_adf_section_replaces_existing_section():
+    import agile_agent_factory.tools.jira_client as jira_client
+
+    existing = {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            jira_client.make_adf_heading("Acceptance Criteria"),
+            jira_client.make_adf_bullet_list(["Old item"]),
+            jira_client.make_adf_heading("Definition of Done"),
+            jira_client.make_adf_bullet_list(["Keep me"]),
+        ],
+    }
+    replacement = [
+        jira_client.make_adf_heading("Acceptance Criteria"),
+        jira_client.make_adf_bullet_list(["New item"]),
+    ]
+
+    result = jira_client.upsert_adf_section(existing, "Acceptance Criteria", replacement)
+    text = jira_client._extract_text_from_adf(result)
+    assert "New item" in text
+    assert "Old item" not in text
+    assert "Keep me" in text
+
+
+def test_extract_text_from_adf_reads_nested_lists_and_mentions():
+    import agile_agent_factory.tools.jira_client as jira_client
+
+    adf = {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "mention", "attrs": {"id": "uid123", "text": "@uid123"}},
+                    {"type": "text", "text": " please review"},
+                ],
+            },
+            jira_client.make_adf_bullet_list(["Line one\nLine two"]),
+        ],
+    }
+
+    text = jira_client._extract_text_from_adf(adf)
+    assert "@uid123" in text
+    assert "please review" in text
+    assert "Line one" in text
+    assert "Line two" in text
+
+
 @resp_lib.activate
 def test_update_issue_description_calls_put():
     import agile_agent_factory.tools.jira_client as jira_client

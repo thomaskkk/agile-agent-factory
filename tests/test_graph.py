@@ -525,7 +525,7 @@ def test_dev_node_rework_path_stays_in_code_review():
 
     jira = MagicMock()
     with patch("agile_agent_factory.nodes.dev_node.JiraClient", return_value=jira), \
-         patch("agile_agent_factory.nodes.dev_node._generate_code_with_llm") as mock_gen:
+         patch("agile_agent_factory.nodes.dev_node._generate_code_with_llm_guarded", return_value=["app/auth.py"]):
         result = dev_node(state)
 
     story_update = result["stories"]["F1-1"]
@@ -598,8 +598,8 @@ def test_finalize_node_no_regression_blockers_behaves_as_before():
     jira.add_comment_adf.assert_not_called()
 
 
-def test_finalize_node_posts_jira_warning_for_regression_blocker_owned_by_done_story():
-    """finalize_node with a regression blocker whose owning story is done: posts Jira warning."""
+def test_finalize_node_requeues_done_owner_for_regression_blocker():
+    """finalize_node must reopen the owning done story instead of only warning."""
     from agile_agent_factory.nodes import finalize_node
     from agile_agent_factory.agents import readme_agent, sre_agent
 
@@ -631,19 +631,22 @@ def test_finalize_node_posts_jira_warning_for_regression_blocker_owned_by_done_s
 
     jira = MagicMock()
     with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
-         patch.object(readme_agent, "generate_readme"), \
-         patch.object(sre_agent, "emulate_deployment"):
+         patch.object(readme_agent, "generate_readme") as readme_mock, \
+         patch.object(sre_agent, "emulate_deployment") as deploy_mock:
         result = finalize_node(state)
 
-    # Both stories marked done
-    assert result["done_count"] == 2
-    # Jira warning posted on the owning story (F1-2)
+    assert "done_count" not in result
+    assert result["stories"]["F1-2"]["column"] == "testing"
+    assert "app/feature.py" in result["stories"]["F1-2"]["incoming_regression_files"]
+    assert result["stories"]["F1-1"]["regression_blockers"] == []
+    readme_mock.assert_not_called()
+    deploy_mock.assert_not_called()
     jira.add_comment_adf.assert_called_once()
     call_args = jira.add_comment_adf.call_args
     assert call_args[0][0] == "F1-2"
     comment_text = call_args[0][1]["content"][0]["content"][0]["text"]
     assert "app/feature.py" in comment_text
-    assert "F1-1" in comment_text
+    assert "reopened" in comment_text.lower() or "requeued" in comment_text.lower()
 
 
 def test_finalize_node_skips_jira_warning_when_owning_story_not_done():
@@ -690,7 +693,7 @@ def test_finalize_node_skips_jira_warning_when_owning_story_not_done():
 
 
 def test_finalize_node_no_owner_for_regression_blocker():
-    """finalize_node: if no story owns the regression blocker file, count it as truly unresolved."""
+    """finalize_node: if no story owns the regression blocker file, warn on the quarantined story."""
     from agile_agent_factory.nodes import finalize_node
     from agile_agent_factory.agents import readme_agent, sre_agent
 
@@ -720,8 +723,11 @@ def test_finalize_node_no_owner_for_regression_blocker():
     # Story marked done
     assert result["done_count"] == 1
     assert result["stories"]["F1-1"]["column"] == "done"
-    # No Jira comment posted (no owner to notify)
-    jira.add_comment_adf.assert_not_called()
+    jira.add_comment_adf.assert_called_once()
+    call_args = jira.add_comment_adf.call_args
+    assert call_args[0][0] == "F1-1"
+    comment_text = call_args[0][1]["content"][0]["content"][0]["text"]
+    assert "app/orphan.py" in comment_text
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +940,7 @@ def test_test_node_intervention_sets_hitl_type():
 
 def test_review_node_exhaustion_sets_hitl_type():
     """When review_node exhausts review retries and fires the intervention interrupt,
-    the returned state patch must include hitl_type == 'review_exhaustion'."""
+    the returned state patch must include hitl_type == 'intervention'."""
     from agile_agent_factory.config import MAX_REVIEW_RETRIES
     from agile_agent_factory.nodes import review_node
     from agile_agent_factory.agents import reviewer_agent
@@ -960,7 +966,7 @@ def test_review_node_exhaustion_sets_hitl_type():
         reviewer_agent.review_patch = original
 
     mock_interrupt.assert_called_once()
-    assert result["stories"]["F1-1"]["hitl_type"] == "review_exhaustion"
+    assert result["stories"]["F1-1"]["hitl_type"] == "intervention"
 
 
 def test_raise_quota_interrupt_sets_hitl_type_for_known_story_key():
@@ -1047,6 +1053,26 @@ def test_handle_resume_quota_resets_autonomous_retries():
     )
 
 
+def test_handle_quota_backoff_preserves_retry_counter_until_real_recovery():
+    """Clearing an expired/pending backoff must not zero the autonomous retry budget."""
+    import main as main_mod
+
+    fake_snapshot = MagicMock()
+    fake_snapshot.values = {"quota_retry_after": 1005.0, "quota_autonomous_retries": 2}
+    fake_graph = MagicMock()
+
+    with (
+        patch("main.time.time", return_value=1000.0),
+        patch("main.time.sleep"),
+    ):
+        main_mod._handle_quota_backoff(fake_graph, {"configurable": {"thread_id": "test"}}, fake_snapshot)
+
+    fake_graph.update_state.assert_called_once_with(
+        {"configurable": {"thread_id": "test"}},
+        {"quota_retry_after": None},
+    )
+
+
 def test_handle_resume_intervention_clears_hitl_type():
     """After intervention HITL is resolved, _handle_resume must clear hitl_type to None."""
     import main as main_mod
@@ -1075,3 +1101,38 @@ def test_handle_resume_intervention_clears_hitl_type():
     assert stories_patch.get("F1-2", {}).get("hitl_type") is None, (
         "intervention resume must clear hitl_type to None"
     )
+
+
+def test_handle_resume_refinement_gate_routes_back_to_upstream_repair():
+    """Refinement-gate HITL resume must store feedback and reopen the owning upstream lane."""
+    import main as main_mod
+
+    fake_task = MagicMock()
+    fake_task.interrupts = [MagicMock(value={
+        "type": "intervention",
+        "blocking_key": "F1-2",
+        "source": "refinement_gate",
+        "errors": ["acceptance_criteria must not be empty."],
+    })]
+    fake_snapshot = MagicMock()
+    fake_snapshot.tasks = [fake_task]
+    fake_snapshot.values = {"stories": {"F1-2": {"story_key": "F1-2"}}}
+
+    update_calls = []
+    fake_graph = MagicMock()
+    fake_graph.update_state.side_effect = lambda cfg, patch: update_calls.append(patch)
+
+    fake_jira = MagicMock()
+    fake_jira.is_flagged.return_value = False
+    fake_jira.get_last_comment_text.return_value = "Add explicit acceptance criteria"
+
+    with (
+        patch("agile_agent_factory.tools.jira_client.JiraClient", return_value=fake_jira),
+        patch("langgraph.types.Command"),
+    ):
+        main_mod._handle_resume(fake_graph, {"configurable": {"thread_id": "test"}}, fake_snapshot)
+
+    stories_patch = update_calls[0]["stories"]["F1-2"]
+    assert stories_patch["hitl_type"] is None
+    assert stories_patch["hitl_feedback"] == "Add explicit acceptance criteria"
+    assert stories_patch["refinement_qa_done"] is False

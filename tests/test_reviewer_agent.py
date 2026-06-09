@@ -253,6 +253,34 @@ def test_write_scope_files_always_included_despite_char_budget(tmp_path, monkeyp
     )
 
 
+def test_root_write_scope_file_is_included_in_review_prompt(tmp_path):
+    """Owned root files like README.md must be included in the reviewer context."""
+    jira = _make_jira()
+    captured: list[str] = []
+
+    def capture_llm(prompt, **kwargs):
+        captured.append(prompt)
+        return {"approved": True, "rejection_reason": ""}
+
+    with patch("agile_agent_factory.tools.llm_adapters.reviewer.call_llm_json", side_effect=capture_llm), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_QA_CRITERIA_DIR", tmp_path / "qa_criteria"), \
+         patch("agile_agent_factory.agents.reviewer_agent.BP_ARCH_CONSTRAINTS", tmp_path / "constraints.md"), \
+         patch("agile_agent_factory.agents.reviewer_agent.PRODUCT_ROOT", tmp_path):
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "main.py").write_text("x = 1")
+        (tmp_path / "README.md").write_text("# Product\n\nRun with flask run\n")
+
+        reviewer_agent.review_patch(
+            jira, ["F3-730"],
+            write_scope=["README.md", "app/main.py"],
+        )
+
+    assert captured, "call_llm_json was never called"
+    prompt = captured[0]
+    assert "### README.md" in prompt
+    assert "flask run" in prompt
+
+
 def test_write_scope_absent_when_not_provided(tmp_path):
     """When write_scope is None, the prompt must NOT contain a scope restriction section."""
     jira = _make_jira()

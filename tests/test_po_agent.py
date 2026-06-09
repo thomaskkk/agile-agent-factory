@@ -212,6 +212,41 @@ def test_must_escalate_ambiguity_sets_hitl_required(tmp_path, monkeypatch, mock_
     assert result.payload.get("hitl_required") is True
 
 
+def test_must_escalate_reuses_existing_blocking_issue(tmp_path, monkeypatch, mock_jira):
+    """Repeated upstream ambiguity should reuse the existing blocker issue instead of creating a new one."""
+    import agile_agent_factory.agents.po_agent as po_agent
+    from agile_agent_factory.agents.po_agent import analyze_and_provision
+
+    business_idea_file = tmp_path / "business_idea.md"
+    business_idea_file.write_text("Build something.")
+    monkeypatch.setattr(po_agent, "BUSINESS_IDEA_PATH", business_idea_file)
+
+    llm_response = {
+        "has_ambiguity": True,
+        "hitl_required": True,
+        "ambiguity_description": "Scope contradicts budget",
+        "assumptions": [],
+        "has_ui": False,
+        "epics": [],
+    }
+
+    jira = mock_jira
+
+    with patch("agile_agent_factory.tools.llm_adapters.po.call_llm_json", return_value=llm_response):
+        result = analyze_and_provision(jira, {
+            "status": "READY",
+            "current_phase": None,
+            "story_keys": [],
+            "epic_keys": [],
+            "blocking_issue_key": "HITL-1",
+            "subtasks": {},
+            "review_retries": 0,
+        })
+
+    jira.create_issue.assert_not_called()
+    assert result.payload.get("blocking_issue_key") == "HITL-1"
+
+
 def test_risk_score_computed_from_assumptions(tmp_path, monkeypatch, mock_jira):
     """unresolved_risk_score must be computed from assumption confidence levels."""
     import agile_agent_factory.agents.po_agent as po_agent

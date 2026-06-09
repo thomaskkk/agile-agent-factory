@@ -56,6 +56,40 @@ def test_design_user_experience_appends_to_jira_description(tmp_path, monkeypatc
     assert jira.update_issue_description.call_count == 2
 
 
+def test_design_user_experience_includes_hitl_feedback_in_story_context(tmp_path, monkeypatch, mock_jira):
+    """Human clarification should be visible to the UX generator on regeneration."""
+    import agile_agent_factory.agents.ux_agent as ux_agent
+
+    monkeypatch.setattr(ux_agent, "BUSINESS_IDEA_PATH", tmp_path / "business_idea.md")
+    (tmp_path / "business_idea.md").write_text("Build a web app.")
+
+    jira = mock_jira
+    jira._request.return_value = {"fields": {"summary": "Landing page", "description": {}}}
+    captured = {}
+
+    def fake_generate(business_idea, stories_block, fallback):
+        captured["stories_block"] = stories_block
+        return {
+            "ui_type": "web",
+            "technology": "Flask",
+            "description": "desc",
+            "screens_or_flows": [],
+            "state_management": "",
+            "design_decisions": [],
+        }
+
+    with patch("agile_agent_factory.agents.ux_agent.generate_ux_spec", side_effect=fake_generate):
+        ux_agent.design_user_experience(
+            jira,
+            ["TEST-1"],
+            {},
+            {},
+            story_feedback={"TEST-1": "Use a single-step sign-in flow."},
+        )
+
+    assert "single-step sign-in flow" in captured["stories_block"]
+
+
 def test_design_user_experience_quota_propagates(tmp_path, monkeypatch, mock_jira):
     """LLMQuotaExceeded raised inside design_user_experience must not be caught."""
     from agile_agent_factory.tools.llm_client import LLMQuotaExceeded

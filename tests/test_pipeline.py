@@ -80,6 +80,28 @@ def test_refinement_gate_triggers_hitl_at_max_retries():
     assert interrupt_payload["blocking_key"] == "F1-1"
 
 
+def test_refinement_gate_hitl_does_not_clear_flag():
+    """refinement_gate HITL must leave the Jira flag raised for human visibility and resume guards."""
+    from agile_agent_factory.nodes.pipeline import refinement_gate_node
+    from agile_agent_factory.config import MAX_REFINEMENT_RETRIES
+
+    state = _make_state(story_extra={"refinement_retries": MAX_REFINEMENT_RETRIES - 1})
+    jira = _mock_jira()
+
+    with (
+        patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira),
+        patch("agile_agent_factory.nodes.pipeline._story_summary", return_value="Do something"),
+        patch("agile_agent_factory.agents.ready_contract.build_ready_contract", return_value={}),
+        patch("agile_agent_factory.agents.ready_contract.validate_ready_contract", return_value=["missing field"]),
+        patch("agile_agent_factory.agents.ready_contract.readiness_repair_update", return_value={}),
+        patch("langgraph.types.interrupt"),
+    ):
+        refinement_gate_node(state)
+
+    jira.set_flag.assert_called_once()
+    jira.clear_flag.assert_not_called()
+
+
 def test_refinement_gate_resets_retries_on_success():
     """Successful gate validation must set refinement_retries=0 in the returned state."""
     from agile_agent_factory.nodes.pipeline import refinement_gate_node

@@ -12,7 +12,13 @@ from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
-from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, raise_quota_interrupt
+from agile_agent_factory.nodes.helpers import (
+    _active_story,
+    derive_story_write_scope,
+    _path_in_write_scope,
+    _safe_transition,
+    raise_quota_interrupt,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -27,9 +33,8 @@ def _is_out_of_scope_rejection(reason: str, write_scope: list[str]) -> bool:
     cited = re.findall(r"(?:app|tests)/[\w/]+\.py", reason)
     if not cited:
         return False
-    scope_set = set(write_scope)
     # If ALL cited files are outside the scope → out-of-scope rejection
-    return all(f not in scope_set for f in cited)
+    return all(not _path_in_write_scope(f, write_scope) for f in cited)
 
 
 def _is_vague_rejection(reason: str, story_criteria: list[str]) -> bool:
@@ -108,7 +113,11 @@ def _pre_review_gate(
 
     # --- Check 1: Scope completeness ---
     if write_scope:
-        missing = [p for p in write_scope if not (product_root / p).exists()]
+        missing = []
+        for scoped_path in write_scope:
+            target = product_root / scoped_path.rstrip("/")
+            if not target.exists():
+                missing.append(scoped_path)
         if missing:
             return False, f"Missing required files: {missing}"
 
@@ -182,18 +191,7 @@ def review_node(state: PipelineState) -> dict:
 
     story_criteria = state.get("gherkin_criteria", {}).get(sk, [])
 
-    # Derive write scope from test_contract so the reviewer only verdicts on owned files
-    tc = story.get("test_contract", {})
-    write_scope: list[str] = []
-    if tc:
-        if tc.get("test_file"):
-            write_scope.append(tc["test_file"])
-        for imp in (tc.get("target_imports") or []):
-            m = re.match(r"from (app(?:\.\w+)+) import", imp)
-            if m:
-                path_str = m.group(1).replace(".", "/") + ".py"
-                if path_str not in write_scope:
-                    write_scope.append(path_str)
+    write_scope = derive_story_write_scope(sk, story)
 
     # Milestone 3: deterministic pre-gate — catches structural failures before LLM review
     from agile_agent_factory.config import PRODUCT_ROOT as _PRODUCT_ROOT
@@ -311,15 +309,11 @@ def review_node(state: PipelineState) -> dict:
         jira.add_comment_adf(sk, make_adf_doc(summary))
         jira.set_flag(sk)
         interrupt({"type": "intervention", "blocking_key": sk})
-        try:
-            jira.clear_flag(sk)
-        except Exception:
-            pass
         # After human resume: fresh review cycle with full retry budget
         return {
             "review_approved": False,
             "review_retries": 0,
-            "stories": {sk: {"review_retries": 0, "review_status": "pending_review", "hitl_type": "review_exhaustion"}},
+            "stories": {sk: {"review_retries": 0, "review_status": "pending_review", "hitl_type": "intervention"}},
         }
 
     log(f"Code review: APPROVED for {sk}.")

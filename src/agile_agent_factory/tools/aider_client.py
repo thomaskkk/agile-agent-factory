@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+from typing import Sequence
 from agile_agent_factory.config import AIDER_ENABLED, AIDER_MODEL, ANTHROPIC_API_KEY, OPENAI_API_KEY, LLM_TIMEOUT_SECONDS, PRODUCT_ROOT
 from agile_agent_factory.tools.logger import log
 
@@ -15,7 +16,19 @@ def is_available() -> bool:
     return True
 
 
-def run_task(task_description: str, blueprint: str, review_feedback: str = "") -> dict[str, object]:
+def run_task(
+    task_description: str,
+    blueprint: str,
+    review_feedback: str = "",
+    write_scope: Sequence[str] | None = None,
+) -> dict[str, object]:
+    scope_block = ""
+    if write_scope:
+        scope_block = (
+            "\n\nSTRICT WRITE SCOPE:\n"
+            + "\n".join(f"- {path}" for path in write_scope)
+            + "\nDo NOT modify any file outside this list."
+        )
     if review_feedback:
         # Rework mode: review feedback is the primary directive.
         # Showing the blueprint as read-only context so aider knows the file layout,
@@ -28,12 +41,15 @@ def run_task(task_description: str, blueprint: str, review_feedback: str = "") -
             "do not re-implement it from scratch.\n\n"
             f"Reviewer rejection (you MUST fix this):\n{review_feedback}\n\n"
             f"Architecture context (read-only):\n{blueprint}"
+            f"{scope_block}"
         )
     else:
         full_message = (
             "You are implementing a software product. "
             "Write code to app/ and tests to tests/. "
-            f"Follow the blueprint exactly.\n\nBlueprint:\n{blueprint}\n\nTask:\n{task_description}"
+            "Follow the blueprint exactly.\n\n"
+            f"Blueprint:\n{blueprint}\n\nTask:\n{task_description}"
+            f"{scope_block}"
         )
     cmd = [
         "aider",

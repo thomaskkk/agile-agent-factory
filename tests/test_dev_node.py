@@ -1,6 +1,8 @@
 """Tests for dev_node._write_generated_files namespace collision detection."""
 import importlib
 
+import pytest
+
 
 def _mod():
     # nodes/__init__.py shadows 'dev_node' attribute with the function import,
@@ -226,6 +228,50 @@ def test_write_scope_writes_in_scope_paths_normally(tmp_path, monkeypatch):
     assert (tmp_path / "app" / "service.py").read_text() == "# service"
 
 
+def test_write_scope_directory_prefix_allows_nested_files(tmp_path, monkeypatch):
+    """Directory scope entries should allow writes anywhere under that owned directory."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app" / "repository").mkdir(parents=True)
+
+    written = _mod()._write_generated_files(
+        [{"path": "app/repository/recipe_repository.py", "content": "# repo"}],
+        write_scope=["app/repository/"],
+    )
+
+    assert written == ["app/repository/recipe_repository.py"]
+    assert (tmp_path / "app" / "repository" / "recipe_repository.py").exists()
+
+
+def test_write_scope_allows_explicit_root_files(tmp_path, monkeypatch):
+    """Root files like README.md should be writable when explicitly owned by the story."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+
+    written = _mod()._write_generated_files(
+        [{"path": "README.md", "content": "# Product\n"}],
+        write_scope=["README.md"],
+    )
+
+    assert written == ["README.md"]
+    assert (tmp_path / "README.md").exists()
+
+
+def test_write_scope_skips_unchanged_root_file(tmp_path, monkeypatch):
+    """Rewriting identical content must be treated as a no-op, not a touched file."""
+    import agile_agent_factory.tools.path_utils as pu
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "README.md").write_text("# Product\n")
+
+    written = _mod()._write_generated_files(
+        [{"path": "README.md", "content": "# Product\n"}],
+        write_scope=["README.md"],
+    )
+
+    assert written == []
+    assert (tmp_path / "README.md").read_text() == "# Product\n"
+
+
 def test_write_scope_none_writes_all_paths(tmp_path, monkeypatch):
     """When write_scope is None, all valid paths are written (backward compat)."""
     import agile_agent_factory.tools.path_utils as pu
@@ -431,6 +477,279 @@ def test_write_scope_derived_on_initial_gen_not_only_rework(tmp_path, monkeypatc
     assert "app/auth.py" in scope, "module from target_imports must be in write_scope for initial gen"
 
 
+def test_derive_story_write_scope_expands_scaffold_contract_files(tmp_path):
+    """Scaffold stories must inherit architecture-backed directory/root hints from their test contract."""
+    import importlib
+    from unittest.mock import patch
+
+    helpers = importlib.import_module("agile_agent_factory.nodes.helpers")
+
+    product_root = tmp_path / "product"
+    (product_root / "tests").mkdir(parents=True)
+    (product_root / "tests" / "test_scaffold_setup.py").write_text(
+        """
+readme_candidates = ["README.md", "README.rst"]
+required_dirs = [
+    "app/routes",
+    "app/models",
+    "app/repository",
+    "app/templates",
+]
+req_file = "requirements.txt"
+pyproject = "pyproject.toml"
+"""
+    )
+
+    task_path = tmp_path / "F3-730.md"
+    task_path.write_text(
+        """
+Scenario: Web server starts on configured port
+  Given the application is properly initialized
+  When a developer executes 'flask run' or 'uvicorn main:app' from the project root
+  Then a web server starts and listens on http://localhost:5000
+
+### File Contracts
+- `app/__init__.py`: Package init
+- `app/main.py`: Flask app entry point
+- `app/routes/__init__.py`: Routes package init
+- `app/routes/health.py`: Health check route
+- `app/models/__init__.py`: Models package init
+- `app/repository/__init__.py`: Repository package init
+- `app/repository/recipe_repository.py`: Repository implementation
+- `app/templates/base.html`: Base template
+- `app/templates/home.html`: Home template
+- `tests/test_scaffold_setup.py`: Scaffold tests
+- `requirements.txt`: Dependencies
+- `README.md`: Documentation
+"""
+    )
+
+    story = {
+        "story_key": "F3-730",
+        "test_contract": {
+            "test_file": "tests/test_scaffold_setup.py",
+            "target_imports": [
+                "from app.main import app",
+                "from app.routes.health import health_check",
+            ],
+            "sample_data": [
+                {"directory": "app/routes", "must_exist": True},
+                {"directory": "app/models", "must_exist": True},
+            ],
+        },
+    }
+
+    with patch("agile_agent_factory.nodes.helpers.bp_task_path", return_value=task_path):
+        scope = helpers.derive_story_write_scope("F3-730", story, product_root=product_root)
+
+    assert "tests/test_scaffold_setup.py" in scope
+    assert "app/main.py" in scope
+    assert "app/routes/health.py" in scope
+    assert "app/routes/__init__.py" in scope
+    assert "app/repository/" in scope
+    assert "app/templates/" in scope
+    assert "app/models/" in scope
+    assert "main.py" in scope
+    assert "README.md" in scope
+    assert "requirements.txt" in scope
+
+
+def test_dev_node_expands_scaffold_write_scope_from_architecture(tmp_path, monkeypatch):
+    """dev_node should pass scaffold-owned architecture files into the guarded generation scope."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    dn = _mod()
+
+    (tmp_path / "tests").mkdir(parents=True)
+    (tmp_path / "tests" / "test_scaffold_setup.py").write_text(
+        'required_dirs = ["app/repository", "app/templates"]\nreadme = "README.md"\n'
+    )
+    task_path = tmp_path / "F3-730.md"
+    task_path.write_text(
+        """
+Scenario: Web server starts on configured port
+  Given the application is properly initialized
+  When a developer executes 'uvicorn main:app' from the project root
+  Then a web server starts and listens on http://localhost:5000
+
+### File Contracts
+- `app/main.py`: Flask app entry point
+- `app/routes/health.py`: Health check route
+- `app/repository/__init__.py`: Repository package init
+- `app/templates/base.html`: Base template
+- `README.md`: Documentation
+"""
+    )
+
+    captured_scope = {}
+
+    def fake_generate(blueprint, review_feedback="", write_scope=None, model=None):
+        captured_scope["write_scope"] = write_scope
+
+    state = {
+        "active_story_key": "F3-730",
+        "stories": {
+            "F3-730": {
+                "story_key": "F3-730",
+                "column": "development",
+                "test_contract": {
+                    "test_file": "tests/test_scaffold_setup.py",
+                    "target_imports": [
+                        "from app.main import app",
+                        "from app.routes.health import health_check",
+                    ],
+                },
+            }
+        },
+        "epic_keys": [],
+    }
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="some blueprint"),
+        patch.object(dn, "_generate_code_with_llm", side_effect=fake_generate),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node._safe_transition", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=False),
+        patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path),
+        patch("agile_agent_factory.nodes.helpers.PRODUCT_ROOT", tmp_path),
+        patch("agile_agent_factory.nodes.helpers.bp_task_path", return_value=task_path),
+    ):
+        dn.dev_node(state)
+
+    scope = captured_scope.get("write_scope") or []
+    assert "app/repository/" in scope
+    assert "app/templates/" in scope
+    assert "main.py" in scope
+    assert "README.md" in scope
+
+
+def test_aider_failure_falls_back_to_llm(tmp_path):
+    """If aider is available but fails, dev_node must fall back to LLM-direct generation."""
+    from unittest.mock import MagicMock, patch
+
+    dn = _mod()
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "development",
+                "test_contract": {},
+            }
+        },
+        "epic_keys": [],
+    }
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="some blueprint"),
+        patch.object(dn, "_generate_code_with_llm") as mock_llm,
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node._safe_transition", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=True),
+        patch("agile_agent_factory.tools.aider_client.run_task", return_value={"success": False, "output": "boom"}),
+    ):
+        dn.dev_node(state)
+
+    mock_llm.assert_called_once()
+
+
+def test_llm_direct_scope_guard_rolls_back_out_of_scope_writes(tmp_path, monkeypatch):
+    """If a generator writes outside write_scope, dev_node must roll it back without crashing."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    dn = _mod()
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "development",
+                "test_contract": {
+                    "test_file": "tests/test_auth.py",
+                    "target_imports": ["from app.auth import login"],
+                },
+            }
+        },
+        "epic_keys": [],
+    }
+
+    def fake_generate(*args, **kwargs):
+        (tmp_path / "app").mkdir(exist_ok=True)
+        (tmp_path / "app" / "forbidden.py").write_text("x = 1")
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="some blueprint"),
+        patch.object(dn, "_generate_code_with_llm", side_effect=fake_generate),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node._safe_transition", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=False),
+        patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path),
+        patch("agile_agent_factory.nodes.helpers.PRODUCT_ROOT", tmp_path),
+    ):
+        result = dn.dev_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "testing"
+    assert result["stories"]["F1-1"]["last_changed_files"] == []
+    assert not (tmp_path / "app" / "forbidden.py").exists()
+
+
+def test_llm_direct_scope_guard_keeps_in_scope_writes(tmp_path, monkeypatch):
+    """Out-of-scope side effects must be rolled back while valid in-scope writes survive."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    dn = _mod()
+
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "development",
+                "test_contract": {
+                    "test_file": "tests/test_auth.py",
+                    "target_imports": ["from app.auth import login"],
+                },
+            }
+        },
+        "epic_keys": [],
+    }
+
+    def fake_generate(*args, **kwargs):
+        (tmp_path / "app").mkdir(exist_ok=True)
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        (tmp_path / "app" / "auth.py").write_text("def login():\n    return True\n")
+        (tmp_path / "tests" / "test_auth.py").write_text("def test_login():\n    assert True\n")
+        (tmp_path / "app" / "forbidden.py").write_text("x = 1")
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="some blueprint"),
+        patch.object(dn, "_generate_code_with_llm", side_effect=fake_generate),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node._safe_transition", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=False),
+        patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path),
+        patch("agile_agent_factory.nodes.helpers.PRODUCT_ROOT", tmp_path),
+    ):
+        result = dn.dev_node(state)
+
+    assert result["stories"]["F1-1"]["column"] == "testing"
+    assert result["stories"]["F1-1"]["last_changed_files"] == ["app/auth.py", "tests/test_auth.py"]
+    assert (tmp_path / "app" / "auth.py").exists()
+    assert (tmp_path / "tests" / "test_auth.py").exists()
+    assert not (tmp_path / "app" / "forbidden.py").exists()
+
+
 def test_initial_gen_prompt_includes_write_scope_paths():
     """_generate_code_with_llm initial gen branch must include write_scope paths in the prompt."""
     from unittest.mock import patch
@@ -454,6 +773,132 @@ def test_initial_gen_prompt_includes_write_scope_paths():
     prompt = captured.get("prompt", "")
     assert "tests/test_auth.py" in prompt, "write_scope paths must appear in initial gen prompt"
     assert "app/auth.py" in prompt, "write_scope paths must appear in initial gen prompt"
+
+
+def test_generate_code_with_llm_skips_string_entries_without_crashing(tmp_path, monkeypatch):
+    """Malformed list entries from the LLM should be ignored instead of crashing generation."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    with patch(
+        "agile_agent_factory.nodes.dev_node.call_llm_json",
+        return_value=["README.md", {"path": "app/main.py", "content": "app = None\n"}],
+    ):
+        _mod()._generate_code_with_llm(
+            blueprint="Build scaffold",
+            review_feedback="",
+            write_scope=["app/main.py"],
+            model=None,
+        )
+
+    assert (tmp_path / "app" / "main.py").exists()
+    assert not (tmp_path / "README.md").exists()
+
+
+def test_generate_code_with_llm_accepts_dict_wrapped_files_payload(tmp_path, monkeypatch):
+    """Object-shaped generation payloads with a files array should still be accepted."""
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+
+    with patch(
+        "agile_agent_factory.nodes.dev_node.call_llm_json",
+        return_value={"files": [{"path": "app/main.py", "content": "app = None\n"}]},
+    ):
+        _mod()._generate_code_with_llm(
+            blueprint="Build scaffold",
+            review_feedback="",
+            write_scope=["app/main.py"],
+            model=None,
+        )
+
+    assert (tmp_path / "app" / "main.py").exists()
+
+
+def test_dev_rework_noop_readme_uses_readme_fallback():
+    """README review loops should retry through the README-specific fallback before giving up."""
+    from unittest.mock import MagicMock, patch
+
+    dn = _mod()
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "code_review",
+                "review_status": "rework_needed",
+                "review_rejection_reason": "README must contain server startup instructions",
+                "test_contract": {"test_file": "tests/test_scaffold_setup.py"},
+            }
+        },
+        "epic_keys": [],
+    }
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="blueprint"),
+        patch.object(dn, "_generate_code_with_llm_guarded", return_value=[]),
+        patch.object(dn, "_generate_readme_rework_guarded", return_value=["README.md"]) as readme_fallback,
+        patch.object(dn, "derive_story_write_scope", return_value=["README.md"]),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", MagicMock()),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=False),
+    ):
+        result = dn.dev_node(state)
+
+    readme_fallback.assert_called_once_with(["README.md"])
+    assert result["stories"]["F1-1"]["review_status"] == "pending_review"
+    assert result["stories"]["F1-1"]["last_changed_files"] == ["README.md"]
+
+
+def test_dev_rework_noop_escalates_after_retries():
+    """Repeated no-op rework attempts should interrupt instead of looping back to review unchanged."""
+    from unittest.mock import MagicMock, patch
+
+    dn = _mod()
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "code_review",
+                "review_status": "rework_needed",
+                "review_rejection_reason": "Missing startup instructions",
+                "test_contract": {
+                    "test_file": "tests/test_auth.py",
+                    "target_imports": ["from app.auth import login"],
+                },
+            }
+        },
+        "epic_keys": [],
+    }
+
+    jira = MagicMock()
+    interrupt_calls = []
+
+    def fake_interrupt(payload):
+        interrupt_calls.append(payload)
+        return None
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="blueprint"),
+        patch.object(dn, "_generate_code_with_llm_guarded", side_effect=[[], []]),
+        patch.object(dn, "_generate_readme_rework_guarded", return_value=[]),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", return_value=jira),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=False),
+        patch("langgraph.types.interrupt", side_effect=fake_interrupt),
+    ):
+        result = dn.dev_node(state)
+
+    assert interrupt_calls == [{"type": "intervention", "blocking_key": "F1-1", "source": "dev_noop_rework"}]
+    jira.set_flag.assert_called_once_with("F1-1")
+    assert result["stories"]["F1-1"]["hitl_type"] == "intervention"
+    assert result["stories"]["F1-1"]["review_status"] == "rework_needed"
 
 
 # ---------------------------------------------------------------------------

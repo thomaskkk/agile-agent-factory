@@ -67,7 +67,7 @@ def main() -> None:
 
     # Fresh start or crash recovery — invoke the graph
     log("Reading business idea from ../business_idea.md.")
-    graph.invoke({}, config)
+    _invoke_graph(graph, {}, config)
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +94,42 @@ def _handle_quota_backoff(graph, config: dict, snapshot) -> None:
     else:
         log("Quota backoff timestamp already passed — retrying immediately.")
 
-    # Clear the timestamp and reset the autonomous retry counter so the next
-    # graph.invoke() runs as though quota is resolved.
+    # Clear only the timestamp. The autonomous retry counter must remain intact
+    # until a real successful invoke proves quota recovery.
     try:
-        graph.update_state(config, {"quota_retry_after": None, "quota_autonomous_retries": 0})
+        graph.update_state(config, {"quota_retry_after": None})
     except Exception as e:
         log(f"Quota backoff: failed to clear state ({e}); will retry on next run")
         return
     log("Quota backoff cleared. Resuming pipeline.")
+
+
+def _invoke_graph(graph, payload, config: dict) -> None:
+    """Invoke the graph, then normalize autonomous quota state if recovery succeeded."""
+    graph.invoke(payload, config)
+    _reset_quota_autonomous_retries_if_resolved(graph, config)
+
+
+def _reset_quota_autonomous_retries_if_resolved(graph, config: dict) -> None:
+    snapshot = graph.get_state(config)
+    if not snapshot or not snapshot.values:
+        return
+
+    retries = snapshot.values.get("quota_autonomous_retries", 0)
+    if not retries:
+        return
+    if snapshot.values.get("quota_retry_after"):
+        return
+
+    info = _interrupt_value(snapshot)
+    if info and info.get("type") == "quota":
+        return
+
+    try:
+        graph.update_state(config, {"quota_autonomous_retries": 0})
+        log("Quota recovery confirmed. Autonomous retry counter reset.")
+    except Exception as e:
+        log(f"Quota recovery: failed to reset autonomous retry counter ({e})")
 
 
 def _is_interrupted(snapshot) -> bool:
@@ -139,11 +167,17 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
     info = _interrupt_value(snapshot)
     if not info:
         log("No interrupt value found. Resuming with empty feedback.")
-        graph.invoke(Command(resume=""), config)
+        _invoke_graph(graph, Command(resume=""), config)
         return
 
     interrupt_type = info.get("type")
     blocking_key = info.get("blocking_key")
+    story_keys = set((snapshot.values or {}).get("stories", {}).keys()) if snapshot and snapshot.values else set()
+    is_story_blocker = blocking_key in story_keys
+    if not is_story_blocker and interrupt_type == "intervention" and blocking_key and not story_keys:
+        # Older snapshots and some tests do not materialize the stories map here.
+        # Intervention blockers historically point at story keys, so preserve resume behavior.
+        is_story_blocker = True
     jira = JiraClient()
 
     if interrupt_type == "quota":
@@ -152,11 +186,11 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
             return
         log("Quota flag cleared. Resuming pipeline.")
         # Reset autonomous retry counter and clear hitl_type so the story re-enters dispatch
-        graph.update_state(config, {
-            "quota_autonomous_retries": 0,
-            "stories": {blocking_key: {"hitl_type": None}} if blocking_key else {},
-        })
-        graph.invoke(Command(resume="quota_resolved"), config)
+        patch = {"quota_autonomous_retries": 0}
+        if is_story_blocker:
+            patch["stories"] = {blocking_key: {"hitl_type": None}}
+        graph.update_state(config, patch)
+        _invoke_graph(graph, Command(resume="quota_resolved"), config)
         return
 
     if interrupt_type in ("refinement", "intervention"):
@@ -170,13 +204,18 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
                 jira.clear_flag(blocking_key)
             except Exception:
                 pass
-        # Clear hitl_type and reset review_retries so the dispatcher re-enters the node
-        # fresh with a full retry budget (the node is re-entered from scratch on Send()-resume,
-        # so the return value inside the HITL path never updates the checkpoint).
-        if blocking_key:
-            graph.update_state(config, {"stories": {blocking_key: {"hitl_type": None, "review_retries": 0}}})
+        if is_story_blocker:
+            story_patch = {"hitl_type": None, "review_retries": 0, "hitl_feedback": feedback}
+            if interrupt_type == "intervention" and info.get("source") == "refinement_gate":
+                from agile_agent_factory.agents.ready_contract import readiness_repair_update
+                repair_patch = readiness_repair_update(info.get("errors", []))
+                repair_patch.pop("hitl_type", None)
+                story_patch.update(repair_patch)
+                story_patch["refinement_retries"] = 0
+                story_patch["ready_validation_errors"] = info.get("errors", [])
+            graph.update_state(config, {"stories": {blocking_key: story_patch}})
         log(f"Flag cleared. Human feedback: {feedback[:200]}")
-        graph.invoke(Command(resume=feedback), config)
+        _invoke_graph(graph, Command(resume=feedback), config)
         return
 
     if interrupt_type == "blocked":
@@ -193,11 +232,11 @@ def _handle_resume(graph, config: dict, snapshot) -> None:
             return
         graph.update_state(config, {"stories": cleared})
         log(f"Unblocked {len(cleared)} story/stories (flag cleared by human).")
-        graph.invoke(Command(resume=""), config)
+        _invoke_graph(graph, Command(resume=""), config)
         return
 
     log(f"Unknown interrupt type '{interrupt_type}'. Resuming with empty feedback.")
-    graph.invoke(Command(resume=""), config)
+    _invoke_graph(graph, Command(resume=""), config)
 
 
 if __name__ == "__main__":

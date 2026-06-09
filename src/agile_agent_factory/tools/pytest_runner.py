@@ -29,7 +29,7 @@ def run_pytest(
         capture_output=True,
         text=True,
         env=env,
-        cwd=str(PRODUCT_ROOT.parent),
+        cwd=str(PRODUCT_ROOT),
     )
     output = result.stdout + result.stderr
     log(f"pytest finished with exit code {result.returncode}.")

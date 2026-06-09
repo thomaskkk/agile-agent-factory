@@ -105,3 +105,15 @@ def test_run_pytest_no_targets_defaults_to_tests_dir(mocker):
     cmd = mock_run.call_args.args[0]
     full_tests_dir = str(pytest_runner.PRODUCT_ROOT / "tests")
     assert full_tests_dir in cmd
+
+
+def test_run_pytest_uses_product_root_as_cwd(mocker):
+    mock_run = mocker.patch("agile_agent_factory.tools.pytest_runner.subprocess.run")
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = ""
+    mock_run.return_value.stderr = ""
+
+    import agile_agent_factory.tools.pytest_runner as pytest_runner
+    pytest_runner.run_pytest()
+
+    assert mock_run.call_args.kwargs["cwd"] == str(pytest_runner.PRODUCT_ROOT)

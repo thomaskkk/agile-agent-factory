@@ -190,3 +190,31 @@ def test_description_text_passed_to_generate_criteria(tmp_path, monkeypatch, moc
     assert "Users can authenticate with email." in captured.get("description_text", ""), (
         "Description text must be extracted from ADF and passed to generate_criteria"
     )
+
+
+def test_hitl_feedback_is_passed_to_generate_criteria(tmp_path, monkeypatch, mock_jira):
+    """Human clarification captured during refinement should be folded into QA regeneration context."""
+    from agile_agent_factory.agents.qa_agent import inject_gherkin_criteria
+
+    monkeypatch.setattr(
+        "agile_agent_factory.agents.qa_agent.bp_qa_criteria_path",
+        lambda sk: tmp_path / f"{sk}.md",
+    )
+    jira = mock_jira
+    jira._request.return_value = {
+        "fields": {
+            "summary": "User login",
+            "description": {"type": "doc", "content": []},
+        }
+    }
+
+    captured = {}
+
+    def fake_generate(summary, description_text, fallback, model=None):
+        captured["description_text"] = description_text
+        return {"acceptance_criteria": [], "test_contract": {}}
+
+    with patch("agile_agent_factory.agents.qa_agent.generate_criteria", side_effect=fake_generate):
+        inject_gherkin_criteria(jira, ["F1-1"], story_feedback={"F1-1": "The task title is required."})
+
+    assert "The task title is required." in captured.get("description_text", "")

@@ -175,6 +175,31 @@ def append_adf_doc(existing_adf: dict, extra_text: str) -> dict:
     return {"version": 1, "type": "doc", "content": existing_content + [new_paragraph]}
 
 
+def upsert_adf_section(existing_adf: dict | None, heading_text: str, section_nodes: list[dict], level: int = 3) -> dict:
+    """Replace or append a top-level section identified by its heading text."""
+    content = list((existing_adf or {}).get("content", []))
+    start = next(
+        (
+            idx for idx, node in enumerate(content)
+            if node.get("type") == "heading"
+            and node.get("attrs", {}).get("level") == level
+            and _extract_text_from_adf(node).strip() == heading_text
+        ),
+        None,
+    )
+    if start is None:
+        return {"version": 1, "type": "doc", "content": content + section_nodes}
+
+    end = start + 1
+    while end < len(content):
+        node = content[end]
+        if node.get("type") == "heading" and node.get("attrs", {}).get("level", level) <= level:
+            break
+        end += 1
+
+    return {"version": 1, "type": "doc", "content": content[:start] + section_nodes + content[end:]}
+
+
 def make_adf_doc(text: str) -> dict:
     return {
         "version": 1,
@@ -243,10 +268,26 @@ def make_adf_mention_doc(account_id: str, text: str) -> dict:
 
 
 def _extract_text_from_adf(body: dict) -> str:
-    texts = [
-        node.get("text", "")
-        for block in body.get("content", [])
-        for node in block.get("content", [])
-        if node.get("type") == "text"
-    ]
-    return " ".join(texts).strip()
+    def _walk(node) -> str:
+        if isinstance(node, list):
+            return "".join(_walk(child) for child in node)
+        if not isinstance(node, dict):
+            return ""
+
+        node_type = node.get("type")
+        if node_type == "text":
+            return node.get("text", "")
+        if node_type == "hardBreak":
+            return "\n"
+        if node_type == "mention":
+            attrs = node.get("attrs", {})
+            return attrs.get("text") or attrs.get("id", "")
+
+        content = "".join(_walk(child) for child in node.get("content", []))
+        if node_type in {"paragraph", "heading", "listItem"}:
+            return content + "\n"
+        if node_type in {"bulletList", "orderedList", "doc"}:
+            return content
+        return content
+
+    return _walk(body).strip()

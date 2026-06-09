@@ -1,6 +1,6 @@
 from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import DRY_RUN, bp_qa_criteria_path
-from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
+from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list, upsert_adf_section
 from agile_agent_factory.tools.llm_adapters.qa import generate_criteria
 from agile_agent_factory.tools.logger import log
 from agile_agent_factory.tools.workflow import WorkflowState
@@ -19,7 +19,11 @@ def _adf_to_text(adf: dict | None) -> str:
     ).strip()
 
 
-def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentResult:
+def inject_gherkin_criteria(
+    jira: JiraClient,
+    story_keys: list[str],
+    story_feedback: dict[str, str] | None = None,
+) -> AgentResult:
     """Return an AgentResult whose payload carries gherkin_criteria + test_contracts."""
     all_criteria: dict[str, list[str]] = {}
     all_test_contracts: dict[str, dict] = {}
@@ -31,6 +35,11 @@ def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentRes
         log(f"Generating Gherkin criteria for {story_key}: {summary}")
 
         description_text = _adf_to_text(existing_description)
+        feedback_text = ((story_feedback or {}).get(story_key) or "").strip()
+        if feedback_text:
+            description_text = (
+                f"{description_text}\n\nHuman clarification from HITL:\n{feedback_text}".strip()
+            )
         result = generate_criteria(summary, description_text, _QA_FALLBACK)
         criteria = result.get("acceptance_criteria", [])
         test_contract = result.get("test_contract") or {}
@@ -40,9 +49,8 @@ def inject_gherkin_criteria(jira: JiraClient, story_keys: list[str]) -> AgentRes
         _write_qa_criteria(story_key, criteria, test_contract)
 
         if criteria:
-            existing_content = existing_description.get("content", []) if existing_description else []
             criteria_nodes = [make_adf_heading("Acceptance Criteria"), make_adf_bullet_list(criteria)]
-            new_description = {"version": 1, "type": "doc", "content": existing_content + criteria_nodes}
+            new_description = upsert_adf_section(existing_description, "Acceptance Criteria", criteria_nodes)
             jira.update_issue_description(story_key, new_description)
             try:
                 jira.transition_to(story_key, WorkflowState.TECH_REFINEMENT)

@@ -52,8 +52,14 @@ class StoryState(TypedDict, total=False):
     hitl_type: str | None  # "refinement" | "intervention" | "quota" | None
     hitl_feedback: str
     regression_blockers: list  # cross-story test failures quarantined for later resolution
+    incoming_regression_files: list
+    incoming_regression_output: str
     assumption_ledger: list  # recorded PO assumptions when proceeding under ambiguity
     unresolved_risk_score: float  # 0.0–1.0; above ASSUMPTION_RISK_THRESHOLD → HITL
+    last_failure_signature: str
+    last_failure_class: str
+    failure_streak: int
+    last_changed_files: list
 
 
 class PipelineState(TypedDict, total=False):

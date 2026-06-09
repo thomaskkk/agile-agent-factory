@@ -9,7 +9,9 @@ from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.jira_facade import JiraFacade
 from agile_agent_factory.tools.llm_adapters.reviewer import generate_review
 from agile_agent_factory.tools.logger import log
+from agile_agent_factory.tools.path_utils import ROOT_WRITE_ALLOWLIST
 from agile_agent_factory.tools.workflow import WorkflowState
+from agile_agent_factory.nodes.helpers import _path_in_write_scope
 
 _REVIEW_FALLBACK = {"approved": False, "rejection_reason": "LLM did not return valid JSON — manual review required."}
 
@@ -80,6 +82,16 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
                     generated[str(f.relative_to(PRODUCT_ROOT))] = f.read_text(encoding="utf-8")
                 except (UnicodeDecodeError, OSError):
                     pass  # genuinely binary or unreadable — skip silently
+    for root_name in sorted(ROOT_WRITE_ALLOWLIST):
+        f = PRODUCT_ROOT / root_name
+        if not f.exists() or not f.is_file():
+            continue
+        if f.suffix.lower() in _BINARY_EXTENSIONS:
+            continue
+        try:
+            generated[str(f.relative_to(PRODUCT_ROOT))] = f.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            pass
 
     if not generated:
         log("No generated files found for review.")
@@ -98,9 +110,11 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
 
     # Write-scope files are always included first so they are never truncated away.
     # Other files fill the remaining budget up to REVIEW_MAX_TOTAL_CHARS.
-    scope_set = set(write_scope or [])
-    scope_items = [(p, c) for p, c in generated.items() if p in scope_set]
-    other_items = [(p, c) for p, c in generated.items() if p not in scope_set]
+    def _is_owned(path: str) -> bool:
+        return bool(write_scope) and _path_in_write_scope(path, write_scope)
+
+    scope_items = [(p, c) for p, c in generated.items() if _is_owned(p)]
+    other_items = [(p, c) for p, c in generated.items() if not _is_owned(p)]
 
     fences: list[str] = []
     total_chars = 0
@@ -110,21 +124,21 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
     for path, content in scope_items + other_items:
         if len(fences) >= REVIEW_MAX_FILES:
             break
-        char_limit = None if path in scope_set else REVIEW_MAX_FILE_CHARS
+        char_limit = None if _is_owned(path) else REVIEW_MAX_FILE_CHARS
         fence = _fence(path, content, char_limit=char_limit)
-        if path not in scope_set and total_chars + len(fence) > REVIEW_MAX_TOTAL_CHARS:
+        if not _is_owned(path) and total_chars + len(fence) > REVIEW_MAX_TOTAL_CHARS:
             break
         fences.append(fence)
         total_chars += len(fence) + 2  # +2 for the \n\n separator
         snippet, was_truncated = _truncate_for_review(content, char_limit)
         if was_truncated:
             truncated_log.append((path, len(content), len(snippet)))
-            if path in scope_set:
+            if _is_owned(path):
                 truncated_scope_files.append(path)
 
     if truncated_log:
         for tpath, orig, shown in truncated_log:
-            scope_marker = " [WRITE-SCOPE]" if tpath in scope_set else ""
+            scope_marker = " [WRITE-SCOPE]" if _is_owned(tpath) else ""
             log(f"Review truncation: {tpath} — {shown}/{orig} chars shown{scope_marker}")
 
     files_block = "\n\n".join(fences)
@@ -140,8 +154,9 @@ def review_patch(jira: JiraClient, story_keys: list[str], story_criteria: list[s
         log(f"Review: write-scope truncation detected, retrying scope-only: {truncated_scope_files}")
         scope_only_fences = [
             _fence(p, generated[p], char_limit=None)
-            for p in scope_set
+            for p in generated
             if p in generated
+            and _is_owned(p)
         ]
         scope_only_block = "\n\n".join(scope_only_fences)
         result2 = generate_review(dod_section, scope_only_block, write_scope, _REVIEW_FALLBACK)

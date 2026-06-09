@@ -1,6 +1,6 @@
 from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import PRODUCT_ROOT, BP_UX_DECISIONS
-from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list
+from agile_agent_factory.tools.jira_client import JiraClient, make_adf_heading, make_adf_bullet_list, upsert_adf_section
 from agile_agent_factory.tools.llm_adapters.ux import generate_ux_spec
 from agile_agent_factory.tools.logger import log
 
@@ -34,6 +34,7 @@ def design_user_experience(
     story_keys: list[str],
     gherkin_criteria: dict[str, list[str]],
     state: dict,
+    story_feedback: dict[str, str] | None = None,
 ) -> AgentResult:
     log("Generating UI/UX design specification.")
     business_idea = BUSINESS_IDEA_PATH.read_text() if BUSINESS_IDEA_PATH.exists() else ""
@@ -46,6 +47,9 @@ def design_user_experience(
         stories_block += f"\n**{key}:** {summary}\n"
         if criteria:
             stories_block += "\n".join(f"  - {c.splitlines()[0]}" for c in criteria) + "\n"
+        feedback_text = ((story_feedback or {}).get(key) or "").strip()
+        if feedback_text:
+            stories_block += f"  - Human clarification: {feedback_text}\n"
 
     raw = generate_ux_spec(business_idea, stories_block, _UX_FALLBACK)
     spec = _validate_ux_spec(raw)
@@ -103,8 +107,6 @@ def _append_ux_to_stories(jira: JiraClient, story_keys: list[str], spec: dict) -
     for story_key in story_keys:
         issue = jira._request("GET", f"issue/{story_key}?fields=description")
         existing = issue["fields"].get("description") or {}
-        existing_content = existing.get("content", [])
-
         ux_nodes = [
             make_adf_heading("UI/UX Design"),
             {"type": "paragraph", "content": [
@@ -119,6 +121,6 @@ def _append_ux_to_stories(jira: JiraClient, story_keys: list[str], spec: dict) -
             ux_nodes.append(make_adf_heading("Design Decisions", level=4))
             ux_nodes.append(make_adf_bullet_list(decisions))
 
-        new_description = {"version": 1, "type": "doc", "content": existing_content + ux_nodes}
+        new_description = upsert_adf_section(existing, "UI/UX Design", ux_nodes)
         jira.update_issue_description(story_key, new_description)
         log(f"Appended UI/UX design to {story_key}.")

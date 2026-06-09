@@ -27,6 +27,13 @@ def test_not_out_of_scope_when_in_scope_file_cited():
     assert rn._is_out_of_scope_rejection(reason, write_scope) is False
 
 
+def test_not_out_of_scope_when_file_is_under_scoped_directory():
+    rn = _import_rn()
+    reason = "app/repository/recipe_repository.py is missing a required function"
+    write_scope = ["app/repository/"]
+    assert rn._is_out_of_scope_rejection(reason, write_scope) is False
+
+
 def test_not_out_of_scope_when_no_files_cited():
     rn = _import_rn()
     reason = "The acceptance criteria were not met"
@@ -143,6 +150,37 @@ def test_rework_prompt_includes_write_scope(tmp_path):
     )
 
 
+def test_rework_prompt_includes_current_root_file_contents(tmp_path, monkeypatch):
+    """Rework prompts should include current owned root files so README fixes are targeted."""
+    import importlib
+    import agile_agent_factory.tools.path_utils as pu
+    from unittest.mock import patch
+
+    dn = importlib.import_module("agile_agent_factory.nodes.dev_node")
+    monkeypatch.setattr(pu, "PARENT_ROOT", tmp_path)
+    (tmp_path / "README.md").write_text("# Recipe Tracker\n\n## installation\n")
+
+    captured = {}
+
+    def fake_call_llm_json(prompt, system="", fallback=None, model=None, prefill=""):
+        captured["prompt"] = prompt
+        return []
+
+    with patch("agile_agent_factory.nodes.dev_node.call_llm_json", side_effect=fake_call_llm_json), \
+         patch("agile_agent_factory.nodes.dev_node.PRODUCT_ROOT", tmp_path):
+        dn._generate_code_with_llm(
+            blueprint="Build scaffold",
+            review_feedback="README must contain server startup instructions",
+            write_scope=["README.md"],
+            model=None,
+        )
+
+    prompt = captured.get("prompt", "")
+    assert "### README.md" in prompt
+    assert "# Recipe Tracker" in prompt
+    assert "server startup instructions" in prompt
+
+
 # ---------------------------------------------------------------------------
 # Milestone 3: _pre_review_gate
 # ---------------------------------------------------------------------------
@@ -175,6 +213,27 @@ def test_prg_check1_passes_when_all_files_exist(tmp_path):
     # check 1 passes; no test_contract so checks 2–4 also trivially pass
     assert passed is True
     assert reason == ""
+
+
+def test_prg_check1_accepts_existing_directory_scope(tmp_path):
+    """Directory-scoped write allowances should pass check 1 when the directory exists."""
+    prg = _import_prg()
+    (tmp_path / "app" / "templates").mkdir(parents=True)
+    story = {}
+    write_scope = ["app/templates/"]
+    passed, reason = prg(story, write_scope, tmp_path)
+    assert passed is True
+    assert reason == ""
+
+
+def test_prg_check1_reports_missing_directory_scope(tmp_path):
+    """Directory-scoped write allowances should fail check 1 when the directory is absent."""
+    prg = _import_prg()
+    story = {}
+    write_scope = ["app/repository/"]
+    passed, reason = prg(story, write_scope, tmp_path)
+    assert passed is False
+    assert "app/repository/" in reason
 
 
 def test_prg_check2_fails_when_expected_test_missing(tmp_path):

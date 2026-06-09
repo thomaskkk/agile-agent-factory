@@ -16,7 +16,18 @@ from agile_agent_factory.tools.dependencies import resolve_dependencies
 from agile_agent_factory.tools.pytest_runner import run_pytest
 from agile_agent_factory.tools.workflow import WorkflowState
 from agile_agent_factory.state import PipelineState
-from agile_agent_factory.nodes.helpers import _active_story, _safe_transition, _to_legacy_state, raise_quota_interrupt
+from agile_agent_factory.nodes.helpers import (
+    _active_story,
+    _changed_product_files,
+    derive_story_write_scope,
+    _path_in_write_scope,
+    _restore_product_files,
+    _safe_transition,
+    _snapshot_product_files,
+    _to_legacy_state,
+    _write_scope_violations,
+    raise_quota_interrupt,
+)
 from agile_agent_factory.nodes.dev_node import _load_dev_context, _correct_code, _extract_error_summary
 from agile_agent_factory.nodes.failure_recovery import (
     classify_failure,
@@ -24,6 +35,151 @@ from agile_agent_factory.nodes.failure_recovery import (
     _scaffold_fixture,
     _scaffold_missing_test_function,
 )
+
+
+def _failure_signature(failure_class: str, output: str) -> str:
+    files = ",".join(_failing_files_in_output(output)[:5])
+    summary = _extract_error_summary(output)
+    return f"{failure_class}|{files}|{summary}"
+
+
+def _repeated_failure_hint(failure_class: str, streak: int) -> str:
+    if streak < 2:
+        return ""
+    return (
+        "REPEATED IDENTICAL FAILURE: the previous correction strategy did not resolve this. "
+        f"This is recurrence #{streak} for failure class '{failure_class}'. "
+        "Change approach. Re-check imports, ownership boundaries, and exact public names before editing.\n\n"
+    )
+
+
+def _story_write_scope(story: dict) -> list[str]:
+    story_key = story.get("story_key", "")
+    return derive_story_write_scope(story_key, story)
+
+
+def _owner_for_file(stories: dict[str, dict], target_path: str) -> str | None:
+    for candidate_sk, candidate_story in stories.items():
+        scope = _story_write_scope(candidate_story)
+        if _path_in_write_scope(target_path, scope):
+            return candidate_sk
+    return None
+
+
+def _merge_unique_paths(existing: list[str], incoming: list[str]) -> list[str]:
+    return list(dict.fromkeys([*(existing or []), *(incoming or [])]))
+
+
+def _merge_regression_output(existing: str, incoming: str) -> str:
+    existing = (existing or "").strip()
+    incoming = (incoming or "").strip()
+    if not existing:
+        return incoming
+    if not incoming or incoming in existing:
+        return existing
+    return f"{existing}\n\n---\n\n{incoming}"
+
+
+def _route_cross_story_regression(
+    *,
+    jira: JiraClient,
+    state: PipelineState,
+    quarantine_story_key: str,
+    blocker_files: list[str],
+    output: str,
+) -> dict:
+    stories = state.get("stories", {})
+
+    story_updates: dict[str, dict] = {
+        quarantine_story_key: {
+            "column": "code_review",
+            "regression_blockers": [],
+            "incoming_regression_files": [],
+            "incoming_regression_output": "",
+        }
+    }
+    requeued_owners: list[str] = []
+    natural_owners: list[str] = []
+    unresolved: list[str] = []
+
+    for blocker_file in blocker_files:
+        owner_sk = _owner_for_file(stories, blocker_file)
+        if not owner_sk or owner_sk == quarantine_story_key:
+            unresolved.append(blocker_file)
+            continue
+
+        owner_story = stories.get(owner_sk, {})
+        owner_column = owner_story.get("column")
+        if owner_column in {"done", "code_review"}:
+            owner_update = story_updates.setdefault(owner_sk, {
+                "column": "testing",
+                "review_status": None,
+                "review_retries": 0,
+                "review_rejection_reason": "",
+                "hitl_type": None,
+                "failure_streak": 0,
+                "last_failure_signature": "",
+                "last_failure_class": "",
+                "incoming_regression_files": list(owner_story.get("incoming_regression_files", [])),
+                "incoming_regression_output": owner_story.get("incoming_regression_output", ""),
+            })
+            owner_update["incoming_regression_files"] = _merge_unique_paths(
+                owner_update.get("incoming_regression_files", []),
+                [blocker_file],
+            )
+            owner_update["incoming_regression_output"] = _merge_regression_output(
+                owner_update.get("incoming_regression_output", ""),
+                output,
+            )
+            requeued_owners.append(owner_sk)
+            continue
+
+        natural_owners.append(owner_sk)
+
+    unresolved = list(dict.fromkeys(unresolved))
+    natural_owners = list(dict.fromkeys(natural_owners))
+    requeued_owners = list(dict.fromkeys(requeued_owners))
+    story_updates[quarantine_story_key]["regression_blockers"] = unresolved
+
+    if requeued_owners:
+        for owner_sk in requeued_owners:
+            owner_files = story_updates[owner_sk]["incoming_regression_files"]
+            try:
+                jira.add_comment_adf(
+                    owner_sk,
+                    make_adf_doc(
+                        "Cross-story regression detected while validating "
+                        f"{quarantine_story_key}. Automatically requeued to testing for: "
+                        f"{', '.join(owner_files)}."
+                    ),
+                )
+            except Exception:
+                pass
+
+    status_parts = []
+    if requeued_owners:
+        status_parts.append(f"Automatically requeued owner stories: {', '.join(requeued_owners)}.")
+    if natural_owners:
+        status_parts.append(f"Owner stories already in progress: {', '.join(natural_owners)}.")
+    if unresolved:
+        status_parts.append(f"No owning story found for: {', '.join(unresolved)}.")
+
+    try:
+        jira.add_comment_adf(
+            quarantine_story_key,
+            make_adf_doc(
+                "Story targeted tests passed, but the full suite exposed cross-story regressions in: "
+                f"{', '.join(blocker_files)}. "
+                + (" ".join(status_parts) if status_parts else "Quarantined for later resolution.")
+            ),
+        )
+    except Exception:
+        pass
+
+    _safe_transition(jira, quarantine_story_key, WorkflowState.TO_CODE_REVIEW)
+    for ek in state.get("epic_keys", []):
+        _safe_transition(jira, ek, WorkflowState.TO_CODE_REVIEW)
+    return {"stories": story_updates}
 
 
 def test_node(state: PipelineState) -> dict:
@@ -49,27 +205,42 @@ def test_node(state: PipelineState) -> dict:
     # Derive story-scoped test target from test_contract (Milestone 2)
     tc = story.get("test_contract", {})
     story_test_file = tc.get("test_file") if tc else None
-    write_scope: list[str] = []
-    if tc:
-        if story_test_file:
-            write_scope.append(story_test_file)
-        for imp in (tc.get("target_imports") or []):
-            if isinstance(imp, str) and imp.strip():
-                m = re.match(r"from (app(?:\.\w+)+) import", imp)
-                if m:
-                    path_str = m.group(1).replace(".", "/") + ".py"
-                    if path_str not in write_scope:
-                        write_scope.append(path_str)
+    write_scope = _story_write_scope(story)
+    full_suite_first = bool(
+        story.get("incoming_regression_files") or story.get("incoming_regression_output")
+    )
+    if full_suite_first:
+        log(
+            f"Test: {sk} was requeued for incoming regression "
+            f"{story.get('incoming_regression_files', [])}; running full suite first."
+        )
 
     retries = 0
     correction_failures = 0
     strategy_retries = 0
     last_output: str | None = None
+    last_failure_signature = story.get("last_failure_signature", "")
+    last_failure_class = story.get("last_failure_class", "")
+    failure_streak = story.get("failure_streak", 0)
 
     while True:
         # --- Run pytest (targeted first, then full suite) ---
         if last_output is None:
-            if story_test_file:
+            if full_suite_first:
+                exit_code, output = run_pytest(deps)
+                if exit_code != 0 and write_scope:
+                    tb_files = _failing_files_in_output(output)
+                    in_scope = any(_path_in_write_scope(f, write_scope) for f in tb_files)
+                    if tb_files and not in_scope:
+                        log(f"Cross-story regression detected for {sk}; re-routing owners.")
+                        return _route_cross_story_regression(
+                            jira=jira,
+                            state=state,
+                            quarantine_story_key=sk,
+                            blocker_files=tb_files,
+                            output=output,
+                        )
+            elif story_test_file:
                 # Stage 1: targeted run (story-scoped, fast signal)
                 target_path = str(PRODUCT_ROOT / story_test_file)
                 t_exit, t_output = run_pytest(deps, test_targets=[target_path])
@@ -83,33 +254,21 @@ def test_node(state: PipelineState) -> dict:
                         # Targeted green, full suite red — classify the regression
                         failure_class = classify_failure(exit_code, output)
                         tb_files = _failing_files_in_output(output)
-                        in_scope = any(f in write_scope for f in tb_files)
+                        in_scope = any(_path_in_write_scope(f, write_scope) for f in tb_files)
                         if in_scope:
                             # Our write-scope still has issues — keep iterating correction
                             log(f"Full suite regression in write-scope for {sk} — continuing correction.")
                         else:
-                            # Cross-story regression — quarantine and advance
-                            log(f"Cross-story regression detected for {sk}; quarantining.")
-                            blocker_ids = [f for f in tb_files if f not in write_scope] or ["unclassified"]
-                            try:
-                                jira.add_comment_adf(
-                                    sk,
-                                    make_adf_doc(
-                                        f"Story targeted tests passed. Full suite has cross-story regression "
-                                        f"in: {', '.join(blocker_ids)}. Story advancing (quarantined)."
-                                    ),
-                                )
-                            except Exception:
-                                pass
-                            _safe_transition(jira, sk, WorkflowState.TO_CODE_REVIEW)
-                            for ek in state.get("epic_keys", []):
-                                _safe_transition(jira, ek, WorkflowState.TO_CODE_REVIEW)
-                            return {
-                                "stories": {sk: {
-                                    "column": "code_review",
-                                    "regression_blockers": blocker_ids,
-                                }}
-                            }
+                            # Cross-story regression — route to the owning story when possible.
+                            log(f"Cross-story regression detected for {sk}; re-routing owners.")
+                            blocker_ids = [f for f in tb_files if not _path_in_write_scope(f, write_scope)] or ["unclassified"]
+                            return _route_cross_story_regression(
+                                jira=jira,
+                                state=state,
+                                quarantine_story_key=sk,
+                                blocker_files=blocker_ids,
+                                output=output,
+                            )
             else:
                 exit_code, output = run_pytest(deps)
         else:
@@ -127,7 +286,16 @@ def test_node(state: PipelineState) -> dict:
             _safe_transition(jira, sk, WorkflowState.TO_CODE_REVIEW)
             for ek in state.get("epic_keys", []):
                 _safe_transition(jira, ek, WorkflowState.TO_CODE_REVIEW)
-            return {"stories": {sk: {"column": "code_review", "regression_blockers": []}}}
+            return {"stories": {sk: {
+                "column": "code_review",
+                "regression_blockers": [],
+                "incoming_regression_files": [],
+                "incoming_regression_output": "",
+                "failure_streak": 0,
+                "last_failure_signature": "",
+                "last_failure_class": "",
+                "last_changed_files": [],
+            }}}
 
         if exit_code in (4, 5) and last_output is None:
             log(f"pytest exit code {exit_code}: collection error.")
@@ -139,6 +307,13 @@ def test_node(state: PipelineState) -> dict:
 
         # --- Mechanical failure recovery (before consuming LLM reasoning budget) ---
         failure_class = classify_failure(exit_code, output)
+        current_signature = _failure_signature(failure_class, output)
+        if current_signature == last_failure_signature:
+            failure_streak += 1
+        else:
+            last_failure_signature = current_signature
+            failure_streak = 1
+        last_failure_class = failure_class
         log(f"Failure class for {sk}: {failure_class}.")
 
         if failure_class == "missing_dependency":
@@ -151,7 +326,14 @@ def test_node(state: PipelineState) -> dict:
 
         elif failure_class == "missing_module":
             if strategy_retries < MAX_STRATEGY_RETRIES:
+                before_snapshot = _snapshot_product_files()
                 scaffolded = _scaffold_missing_module(output)
+                changed_after = _changed_product_files(before_snapshot)
+                violations = _write_scope_violations(changed_after, write_scope or None)
+                if violations:
+                    _restore_product_files(before_snapshot, changed_after)
+                    log(f"Missing-module scaffold exceeded write_scope for {sk}: {violations}")
+                    scaffolded = []
                 if scaffolded:
                     log(f"Scaffolded missing module(s) for {sk}: {scaffolded}.")
                     strategy_retries += 1
@@ -161,7 +343,14 @@ def test_node(state: PipelineState) -> dict:
 
         elif failure_class == "fixture_not_found":
             if strategy_retries < MAX_STRATEGY_RETRIES:
+                before_snapshot = _snapshot_product_files()
                 scaffolded = _scaffold_fixture(output)
+                changed_after = _changed_product_files(before_snapshot)
+                violations = _write_scope_violations(changed_after, write_scope or None)
+                if violations:
+                    _restore_product_files(before_snapshot, changed_after)
+                    log(f"Fixture scaffold exceeded write_scope for {sk}: {violations}")
+                    scaffolded = []
                 if scaffolded:
                     log(f"Scaffolded fixture stub(s) for {sk}: {scaffolded}.")
                     strategy_retries += 1
@@ -171,7 +360,14 @@ def test_node(state: PipelineState) -> dict:
 
         elif failure_class == "missing_test_function":
             if strategy_retries < MAX_STRATEGY_RETRIES:
+                before_snapshot = _snapshot_product_files()
                 scaffolded = _scaffold_missing_test_function(output, story_test_file)
+                changed_after = _changed_product_files(before_snapshot)
+                violations = _write_scope_violations(changed_after, write_scope or None)
+                if violations:
+                    _restore_product_files(before_snapshot, changed_after)
+                    log(f"Test-function scaffold exceeded write_scope for {sk}: {violations}")
+                    scaffolded = []
                 if scaffolded:
                     log(f"Scaffolded test function stub(s) for {sk}: {scaffolded}.")
                     strategy_retries += 1
@@ -192,9 +388,14 @@ def test_node(state: PipelineState) -> dict:
                 hint = _failure_hint(failure_class)
                 log(f"Deterministic failure ({failure_class}) for {sk} — sending targeted hint to LLM.")
                 correction_scope = _augment_scope_for_conftest(write_scope, failure_class, output)
+                repeated_hint = _repeated_failure_hint(failure_class, failure_streak)
                 try:
+                    before_snapshot = _snapshot_product_files()
                     correction_status, corrected = _correct_code(
-                        blueprint, hint + output, model=TEST_MODEL or None, write_scope=correction_scope or None,
+                        blueprint,
+                        repeated_hint + hint + output,
+                        model=TEST_MODEL or None,
+                        write_scope=correction_scope or None,
                         test_contract=story.get("test_contract"),
                         gherkin_criteria=story.get("gherkin_criteria"),
                     )
@@ -202,6 +403,12 @@ def test_node(state: PipelineState) -> dict:
                     patch = raise_quota_interrupt(jira, sk, e, state=state)
                     if patch:
                         return patch
+                changed_after = _changed_product_files(before_snapshot)
+                violations = _write_scope_violations(changed_after, correction_scope or None)
+                if violations:
+                    _restore_product_files(before_snapshot, changed_after)
+                    log(f"Targeted hint correction exceeded write_scope for {sk}: {violations}")
+                    correction_status, corrected = "empty", []
                 strategy_retries += 1
 
                 if correction_status == "truncated":
@@ -227,19 +434,30 @@ def test_node(state: PipelineState) -> dict:
             jira.add_comment_adf(sk, make_adf_doc(summary))
             jira.set_flag(sk)
             interrupt({"type": "intervention", "blocking_key": sk})
-            try:
-                jira.clear_flag(sk)
-            except Exception:
-                pass
             # On resume: node will be re-entered from scratch; return hitl_type so the
             # state captures why this story is blocked.
-            return {"stories": {sk: {"hitl_type": "intervention"}}}
+            return {"stories": {sk: {
+                "hitl_type": "intervention",
+                "last_failure_signature": last_failure_signature,
+                "last_failure_class": last_failure_class,
+                "failure_streak": failure_streak,
+            }}}
 
         log("Requesting LLM-driven correction.")
         correction_scope = _augment_scope_for_conftest(write_scope, failure_class, output)
+        if failure_streak >= 2:
+            focused_scope = [path for path in _failing_files_in_output(output) if _path_in_write_scope(path, correction_scope)]
+            if focused_scope:
+                correction_scope = focused_scope
+                log(f"Repeated failure for {sk} — narrowing correction scope to {focused_scope}.")
+        repeated_hint = _repeated_failure_hint(failure_class, failure_streak)
         try:
+            before_snapshot = _snapshot_product_files()
             correction_status, corrected = _correct_code(
-                blueprint, output, model=TEST_MODEL or None, write_scope=correction_scope or None,
+                blueprint,
+                repeated_hint + output,
+                model=TEST_MODEL or None,
+                write_scope=correction_scope or None,
                 test_contract=story.get("test_contract"),
                 gherkin_criteria=story.get("gherkin_criteria"),
             )
@@ -247,6 +465,12 @@ def test_node(state: PipelineState) -> dict:
             patch = raise_quota_interrupt(jira, sk, e, state=state)
             if patch:
                 return patch
+        changed_after = _changed_product_files(before_snapshot)
+        violations = _write_scope_violations(changed_after, correction_scope or None)
+        if violations:
+            _restore_product_files(before_snapshot, changed_after)
+            log(f"Correction exceeded write_scope for {sk}: {violations}")
+            correction_status, corrected = "empty", []
 
         # Truncation: strategy retry budget (not the LLM reasoning budget)
         if correction_status == "truncated":
@@ -270,13 +494,14 @@ def test_node(state: PipelineState) -> dict:
                 jira.add_comment_adf(sk, make_adf_doc(summary))
                 jira.set_flag(sk)
                 interrupt({"type": "intervention", "blocking_key": sk})
-                try:
-                    jira.clear_flag(sk)
-                except Exception:
-                    pass
                 # On resume: node will be re-entered from scratch; return hitl_type so the
                 # state captures why this story is blocked.
-                return {"stories": {sk: {"hitl_type": "intervention"}}}
+                return {"stories": {sk: {
+                    "hitl_type": "intervention",
+                    "last_failure_signature": last_failure_signature,
+                    "last_failure_class": last_failure_class,
+                    "failure_streak": failure_streak,
+                }}}
             correction_failures += 1
             log(f"No correction produced (failure {correction_failures}/{MAX_CORRECTION_FAILURES + 1}) — retrying.")
             last_output = output
@@ -339,7 +564,7 @@ def _augment_scope_for_conftest(
     This prevents unrelated stories from accidentally overwriting shared fixtures.
     """
     conftest = "tests/conftest.py"
-    if conftest in write_scope:
+    if _path_in_write_scope(conftest, write_scope):
         return write_scope
     if failure_class == "fixture_not_found" or conftest in output:
         return list(write_scope) + [conftest]
