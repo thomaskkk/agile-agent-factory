@@ -13,6 +13,7 @@ from pathlib import Path
 from langgraph.types import interrupt
 
 from agile_agent_factory.config import PRODUCT_ROOT, bp_task_path
+from agile_agent_factory.config import LLM_QUOTA_MAX_RETRIES, LLM_RETRY_BACKOFF_SECONDS
 from agile_agent_factory.tools.jira_client import JiraClient
 from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
 from agile_agent_factory.tools.logger import log
@@ -298,7 +299,8 @@ def raise_quota_interrupt(
     blocking_key: str | None,
     exc: LLMQuotaExceeded,
     state: dict | None = None,
-    max_autonomous_retries: int = 3,
+    max_autonomous_retries: int | None = None,
+    backoff_base_seconds: int | float | None = None,
 ) -> dict | None:
     """Notify Jira of the quota block; autonomously back off up to *max_autonomous_retries* times.
 
@@ -323,13 +325,19 @@ def raise_quota_interrupt(
     """
     _notify_quota(jira, blocking_key, exc)
 
+    max_autonomous_retries = (
+        LLM_QUOTA_MAX_RETRIES if max_autonomous_retries is None else max_autonomous_retries
+    )
+    backoff_base_seconds = (
+        LLM_RETRY_BACKOFF_SECONDS if backoff_base_seconds is None else backoff_base_seconds
+    )
     autonomous_retries = (state or {}).get("quota_autonomous_retries", 0)
     if autonomous_retries < max_autonomous_retries:
-        backoff = 30 * (2 ** autonomous_retries)  # 30s, 60s, 120s, ...
+        backoff = backoff_base_seconds * (2 ** autonomous_retries)
         retry_after = time.time() + backoff
         log(
             f"Quota exceeded — autonomous retry "
-            f"{autonomous_retries + 1}/{max_autonomous_retries} in {backoff}s"
+            f"{autonomous_retries + 1}/{max_autonomous_retries} in {backoff:.0f}s"
         )
         return {
             "quota_retry_after": retry_after,

@@ -117,3 +117,33 @@ def test_run_pytest_uses_product_root_as_cwd(mocker):
     pytest_runner.run_pytest()
 
     assert mock_run.call_args.kwargs["cwd"] == str(pytest_runner.PRODUCT_ROOT)
+
+
+def test_run_pytest_passes_timeout(mocker):
+    mock_run = mocker.patch("agile_agent_factory.tools.pytest_runner.subprocess.run")
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = ""
+    mock_run.return_value.stderr = ""
+
+    import agile_agent_factory.tools.pytest_runner as pytest_runner
+    pytest_runner.run_pytest()
+
+    assert mock_run.call_args.kwargs["timeout"] == pytest_runner.PYTEST_TIMEOUT_SECONDS
+
+
+def test_run_pytest_timeout_returns_special_exit_code(mocker):
+    import subprocess
+    import agile_agent_factory.tools.pytest_runner as pytest_runner
+
+    mock_run = mocker.patch("agile_agent_factory.tools.pytest_runner.subprocess.run")
+    mock_run.side_effect = subprocess.TimeoutExpired(
+        cmd=["uv", "run", "pytest"],
+        timeout=pytest_runner.PYTEST_TIMEOUT_SECONDS,
+        output="partial stdout",
+        stderr="partial stderr",
+    )
+
+    exit_code, output = pytest_runner.run_pytest()
+
+    assert exit_code == 124
+    assert "timed out" in output

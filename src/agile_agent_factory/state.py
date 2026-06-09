@@ -75,6 +75,7 @@ class PipelineState(TypedDict, total=False):
 
     # Active story key — set by the dispatcher to tell a per-story node which story to process
     active_story_key: str
+    active_story_keys: list[str]
 
     # Shared pipeline-level state (Phase 1 — migrated to per-story in Phase 3+)
     has_ui: bool

@@ -199,6 +199,45 @@ def test_po_node_sets_refinement_ux_done_false_when_has_ui():
     assert story["refinement_qa_done"] is False
 
 
+def test_po_node_risk_gate_reanalyzes_after_human_feedback():
+    from agile_agent_factory.nodes import po_node
+    from agile_agent_factory.agents import po_agent
+
+    first = AgentResult(payload={
+        "epic_keys": ["F1-E1"],
+        "story_keys": ["F1-1"],
+        "story_to_epic": {"F1-1": "F1-E1"},
+        "has_ui": False,
+        "assumption_ledger": [{"description": "Assume CSV import", "confidence": 0.2, "impact": 1.0}],
+        "unresolved_risk_score": 0.9,
+    })
+    second = AgentResult(payload={
+        "epic_keys": ["F1-E2"],
+        "story_keys": ["F1-2"],
+        "story_to_epic": {"F1-2": "F1-E2"},
+        "has_ui": True,
+        "assumption_ledger": [],
+        "unresolved_risk_score": 0.0,
+    })
+
+    jira = MagicMock()
+    original = po_agent.analyze_and_provision
+    po_agent.analyze_and_provision = MagicMock(side_effect=[first, second])
+    try:
+        with (
+            patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira),
+            patch("agile_agent_factory.nodes.pipeline._ensure_risk_blocker", return_value="F1-E1"),
+            patch("langgraph.types.interrupt", return_value="Use JSON import instead"),
+        ):
+            result = po_node({})
+    finally:
+        po_agent.analyze_and_provision = original
+
+    assert result["epic_keys"] == ["F1-E2"]
+    assert "F1-2" in result["stories"]
+    assert result["stories"]["F1-2"]["has_ui"] is True
+
+
 # ---------------------------------------------------------------------------
 # QA node
 # ---------------------------------------------------------------------------
@@ -420,6 +459,41 @@ def test_tl_node_advances_all_tech_design_stories_to_development():
     assert result["stories"]["F1-1"]["column"] == "development"
     assert result["stories"]["F1-2"]["column"] == "development"
     assert "F1-3" not in result["stories"]  # only tech_design stories advanced
+
+
+def test_tl_node_only_processes_requested_batch_subset():
+    from agile_agent_factory.nodes import tl_node
+    from agile_agent_factory.agents import tl_agent
+
+    state = {
+        "stories": {
+            "F1-1": {"story_key": "F1-1", "column": "tech_design"},
+            "F1-2": {"story_key": "F1-2", "column": "tech_design"},
+        },
+        "active_story_keys": ["F1-2"],
+        "epic_keys": [],
+        "gherkin_criteria": {},
+        "ux_spec": {},
+        "subtasks": {},
+        "has_ui": False,
+        "dependencies": [],
+    }
+
+    arch = {"files": [], "subtasks": [], "import_rules": "", "test_command": "", "dependencies": []}
+    mock_result = {"architecture": arch, "subtasks": {}, "dependencies": []}
+
+    jira = MagicMock()
+    original = tl_agent.design_architecture
+    tl_agent.design_architecture = MagicMock(return_value=AgentResult(payload=mock_result))
+    try:
+        with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira):
+            result = tl_node(state)
+    finally:
+        tl_agent.design_architecture = original
+
+    assert result["stories"] == {
+        "F1-2": {"column": "development", "architecture": arch, "subtasks": {}, "dependencies": []}
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -693,7 +767,7 @@ def test_finalize_node_skips_jira_warning_when_owning_story_not_done():
 
 
 def test_finalize_node_no_owner_for_regression_blocker():
-    """finalize_node: if no story owns the regression blocker file, warn on the quarantined story."""
+    """Ownerless regression blockers must stop finalization and requeue the quarantined story."""
     from agile_agent_factory.nodes import finalize_node
     from agile_agent_factory.agents import readme_agent, sre_agent
 
@@ -716,18 +790,42 @@ def test_finalize_node_no_owner_for_regression_blocker():
 
     jira = MagicMock()
     with patch("agile_agent_factory.nodes.pipeline.JiraClient", return_value=jira), \
-         patch.object(readme_agent, "generate_readme"), \
-         patch.object(sre_agent, "emulate_deployment"):
+         patch.object(readme_agent, "generate_readme") as readme_mock, \
+         patch.object(sre_agent, "emulate_deployment") as deploy_mock:
         result = finalize_node(state)
 
-    # Story marked done
-    assert result["done_count"] == 1
-    assert result["stories"]["F1-1"]["column"] == "done"
+    assert "done_count" not in result
+    assert result["stories"]["F1-1"]["column"] == "testing"
+    assert result["stories"]["F1-1"]["hitl_type"] == "intervention"
+    assert result["stories"]["F1-1"]["incoming_regression_files"] == ["app/orphan.py"]
+    readme_mock.assert_not_called()
+    deploy_mock.assert_not_called()
+    jira.set_flag.assert_called_once_with("F1-1")
     jira.add_comment_adf.assert_called_once()
     call_args = jira.add_comment_adf.call_args
     assert call_args[0][0] == "F1-1"
     comment_text = call_args[0][1]["content"][0]["content"][0]["text"]
     assert "app/orphan.py" in comment_text
+
+
+def test_raise_quota_interrupt_uses_config_defaults_when_not_overridden():
+    from agile_agent_factory.nodes.helpers import raise_quota_interrupt
+    from agile_agent_factory.tools.llm_client import LLMQuotaExceeded
+
+    jira = MagicMock()
+    exc = LLMQuotaExceeded("anthropic", "rate limit")
+
+    with (
+        patch("agile_agent_factory.nodes.helpers.interrupt"),
+        patch("agile_agent_factory.nodes.helpers.time") as mock_time,
+        patch("agile_agent_factory.nodes.helpers.LLM_QUOTA_MAX_RETRIES", 4),
+        patch("agile_agent_factory.nodes.helpers.LLM_RETRY_BACKOFF_SECONDS", 7),
+    ):
+        mock_time.time.return_value = 1000.0
+        patch_dict = raise_quota_interrupt(jira, "F1-1", exc, state={"quota_autonomous_retries": 1})
+
+    assert patch_dict["quota_retry_after"] == 1000.0 + 14
+    assert patch_dict["quota_autonomous_retries"] == 2
 
 
 # ---------------------------------------------------------------------------

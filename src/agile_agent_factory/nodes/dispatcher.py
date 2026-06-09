@@ -126,11 +126,21 @@ def dispatch_stories(state: PipelineState) -> list[Send] | str:
 
         if column == "tech_design":
             # TL is batch: one Send for ALL tech_design stories together.
-            # tl_node collects all tech_design stories itself; dispatching once
-            # prevents multiple TL invocations each re-processing the full batch.
-            if ready:
-                log(f"Dispatcher: dispatching {len(ready)} story/stories to tl (batch)")
-                sends.append(Send("tl", state))
+            # tl_node processes only the subset included in active_story_keys so
+            # development WIP limits are still respected.
+            next_col = NEXT_COLUMN[column]
+            wip_limit = wip_limits.get(next_col, 999)
+            current_in_next = _wip_count(stories, next_col)
+            available_slots = max(0, wip_limit - current_in_next)
+            if available_slots > 0:
+                batch = ready[:available_slots]
+                log(f"Dispatcher: dispatching {len(batch)} story/stories to tl (batch)")
+                sends.append(
+                    Send(
+                        "tl",
+                        {**state, "active_story_keys": [story["story_key"] for story in batch]},
+                    )
+                )
             continue
 
         if column == "code_review":

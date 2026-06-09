@@ -227,13 +227,13 @@ def test_prg_check1_accepts_existing_directory_scope(tmp_path):
 
 
 def test_prg_check1_reports_missing_directory_scope(tmp_path):
-    """Directory-scoped write allowances should fail check 1 when the directory is absent."""
+    """Directory-scoped write allowances are prefixes, not required concrete files."""
     prg = _import_prg()
     story = {}
     write_scope = ["app/repository/"]
     passed, reason, _category = prg(story, write_scope, tmp_path)
-    assert passed is False
-    assert "app/repository/" in reason
+    assert passed is True
+    assert reason == ""
 
 
 def test_prg_check2_fails_when_expected_test_missing(tmp_path):
@@ -680,3 +680,19 @@ def test_scaffold_structural_gaps_rolls_back_out_of_scope_writes(tmp_path, monke
     assert not (tmp_path / "app" / "pkg" / "leaf.py").exists()
     assert not (tmp_path / "app" / "__init__.py").exists()
     assert not (tmp_path / "app" / "pkg" / "__init__.py").exists()
+
+
+def test_pre_review_gate_ignores_directory_scope_entries(tmp_path):
+    rn = _import_rn()
+    story = {"test_contract": {}, "ready_contract": {}}
+
+    passed, reason, category = rn._pre_review_gate(
+        story,
+        ["app/generated/", "tests/"],
+        tmp_path,
+        extra_packages=[],
+    )
+
+    assert passed is True
+    assert reason == ""
+    assert category == ""

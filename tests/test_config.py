@@ -30,6 +30,10 @@ def test_review_and_readme_budgets_present():
     assert config.README_MAX_FILES == 15
     assert config.README_MAX_FILE_CHARS == 2000
     assert config.README_MAX_TOTAL_CHARS == 20000
+    assert config.PYTEST_TIMEOUT_SECONDS == 300
+    assert config.JIRA_TIMEOUT_SECONDS == 30
+    assert config.JIRA_MAX_RETRIES == 2
+    assert config.JIRA_RETRY_BACKOFF_SECONDS == 2
 
 
 def test_max_strategy_retries_default():

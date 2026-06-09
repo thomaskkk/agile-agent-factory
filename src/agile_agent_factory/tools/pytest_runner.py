@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from agile_agent_factory.config import UV_BIN, PRODUCT_ROOT
+from agile_agent_factory.config import UV_BIN, PRODUCT_ROOT, PYTEST_TIMEOUT_SECONDS
 from agile_agent_factory.tools.logger import log
 
 
@@ -24,13 +24,24 @@ def run_pytest(
     else:
         log(f"Running pytest against {target_label}.")
     cmd = [UV_BIN, "run", *with_args, "python", "-m", "pytest", *targets, "-v"]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(PRODUCT_ROOT),
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(PRODUCT_ROOT),
+            timeout=PYTEST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        output = (
+            f"{stdout}{stderr}\n\n"
+            f"pytest timed out after {PYTEST_TIMEOUT_SECONDS}s."
+        ).strip()
+        log(f"pytest timed out after {PYTEST_TIMEOUT_SECONDS}s.")
+        return 124, output
     output = result.stdout + result.stderr
     log(f"pytest finished with exit code {result.returncode}.")
     return result.returncode, output

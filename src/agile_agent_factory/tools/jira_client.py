@@ -1,3 +1,4 @@
+import time
 from typing import Optional
 
 import requests
@@ -10,7 +11,10 @@ from agile_agent_factory.config import (
     JIRA_FLAG_FIELD_ID,
     JIRA_FLAG_VALUE,
     JIRA_HUMAN_ACCOUNT_ID,
+    JIRA_MAX_RETRIES,
     JIRA_PROJECT_KEY,
+    JIRA_RETRY_BACKOFF_SECONDS,
+    JIRA_TIMEOUT_SECONDS,
     JIRA_USER_EMAIL,
 )
 from agile_agent_factory.tools.logger import log
@@ -28,17 +32,50 @@ class JiraClient:
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
         url = f"{self.base}/rest/api/3/{path}"
-        response = requests.request(
-            method, url, auth=self.auth, headers=self.headers, **kwargs
-        )
-        if not response.ok:
-            raise requests.HTTPError(
-                f"{response.status_code} {response.reason} — {response.text[:500]}",
-                response=response,
-            )
-        if response.status_code == 204 or not response.content:
-            return {}
-        return response.json()
+        attempts = JIRA_MAX_RETRIES + 1
+        last_error: Exception | None = None
+
+        for attempt in range(attempts):
+            try:
+                response = requests.request(
+                    method,
+                    url,
+                    auth=self.auth,
+                    headers=self.headers,
+                    timeout=JIRA_TIMEOUT_SECONDS,
+                    **kwargs,
+                )
+                if not response.ok:
+                    error = requests.HTTPError(
+                        f"{response.status_code} {response.reason} — {response.text[:500]}",
+                        response=response,
+                    )
+                    if attempt < JIRA_MAX_RETRIES and response.status_code >= 500:
+                        wait = JIRA_RETRY_BACKOFF_SECONDS * (2 ** attempt)
+                        log(
+                            f"Jira request failed with {response.status_code}; "
+                            f"retrying in {wait:.1f}s ({attempt + 1}/{JIRA_MAX_RETRIES})."
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise error
+                if response.status_code == 204 or not response.content:
+                    return {}
+                return response.json()
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_error = exc
+                if attempt >= JIRA_MAX_RETRIES:
+                    raise
+                wait = JIRA_RETRY_BACKOFF_SECONDS * (2 ** attempt)
+                log(
+                    f"Jira request network error: {exc}. "
+                    f"Retrying in {wait:.1f}s ({attempt + 1}/{JIRA_MAX_RETRIES})."
+                )
+                time.sleep(wait)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Jira request failed without a response or exception")
 
     def search_jql(self, jql: str, fields: Optional[list] = None) -> dict:
         payload: dict = {"jql": jql, "maxResults": 50}

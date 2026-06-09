@@ -47,6 +47,10 @@ LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "16384"))
 # whole provider chain this many times before pausing the pipeline.
 LLM_QUOTA_MAX_RETRIES = int(os.environ.get("LLM_QUOTA_MAX_RETRIES", "3"))
 LLM_RETRY_BACKOFF_SECONDS = int(os.environ.get("LLM_RETRY_BACKOFF_SECONDS", "30"))
+PYTEST_TIMEOUT_SECONDS = int(os.environ.get("PYTEST_TIMEOUT_SECONDS", "300"))
+JIRA_TIMEOUT_SECONDS = float(os.environ.get("JIRA_TIMEOUT_SECONDS", "30"))
+JIRA_MAX_RETRIES = int(os.environ.get("JIRA_MAX_RETRIES", "2"))
+JIRA_RETRY_BACKOFF_SECONDS = float(os.environ.get("JIRA_RETRY_BACKOFF_SECONDS", "2"))
 
 AIDER_ENABLED = os.environ.get("AIDER_ENABLED", "false").lower() == "true"
 AIDER_MODEL = os.environ.get("AIDER_MODEL", "anthropic/claude-sonnet-4-6")

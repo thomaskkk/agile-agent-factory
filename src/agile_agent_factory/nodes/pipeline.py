@@ -147,7 +147,15 @@ def po_node(state: PipelineState) -> dict:
             f"PO risk gate triggered (risk_score={risk_score:.2f} > threshold={ASSUMPTION_RISK_THRESHOLD:.2f}). "
             f"Interrupting for human input. Blocking: {blocking_key}"
         )
-        interrupt({"type": "refinement", "blocking_key": blocking_key, "source": "po_risk"})
+        feedback = interrupt({"type": "refinement", "blocking_key": blocking_key, "source": "po_risk"})
+        legacy["hitl_feedback"] = feedback or ""
+        try:
+            result = analyze_and_provision(jira, legacy)
+        except LLMQuotaExceeded as e:
+            patch = raise_quota_interrupt(jira, blocking_key, e, state=state)
+            if patch:
+                return patch
+            result = analyze_and_provision(jira, legacy)
 
     epic_keys = result.payload.get("epic_keys", [])
     story_keys = result.payload.get("story_keys", [])
@@ -266,7 +274,11 @@ def tl_node(state: PipelineState) -> dict:
         log("TL: no stories in tech_design — skipping.")
         return {}
 
-    story_keys = tech_stories
+    requested_story_keys = state.get("active_story_keys") or tech_stories
+    story_keys = [sk for sk in requested_story_keys if sk in tech_stories]
+    if not story_keys:
+        log("TL: requested batch no longer in tech_design — skipping.")
+        return {}
     gherkin = state.get("gherkin_criteria", {})
     ux_spec = state.get("ux_spec", {})
     ready_contracts = {
@@ -503,18 +515,9 @@ def finalize_node(state: PipelineState) -> dict:
         stories_update.update(requeue_updates)
         return {"stories": stories_update}
 
-    log("Finalize: generating README and running deployment.")
-
-    generate_readme(legacy)
-    emulate_deployment(jira, story_keys, legacy)
-
-    done_updates = {sk: {"column": "done"} for sk in story_keys}
-    for sk, patch in stories_update.items():
-        done_updates[sk] = {**done_updates.get(sk, {}), **patch}
-
     if unresolved_count > 0:
         for quarantine_sk, story in blocker_stories.items():
-            unresolved_files = done_updates.get(quarantine_sk, {}).get("regression_blockers", [])
+            unresolved_files = stories_update.get(quarantine_sk, {}).get("regression_blockers", [])
             if not unresolved_files:
                 continue
             fallback_warned_count += 1
@@ -524,8 +527,36 @@ def finalize_node(state: PipelineState) -> dict:
             )
             try:
                 jira.add_comment_adf(quarantine_sk, make_adf_doc(warning_text))
+                jira.set_flag(quarantine_sk)
             except Exception as exc:  # noqa: BLE001
                 log(f"Finalize: failed to post fallback warning on {quarantine_sk}: {exc}")
+            stories_update[quarantine_sk] = {
+                "column": "testing",
+                "review_status": None,
+                "review_retries": 0,
+                "review_rejection_reason": "",
+                "hitl_type": "intervention",
+                "incoming_regression_files": list(unresolved_files),
+                "incoming_regression_output": warning_text,
+                "regression_blockers": list(unresolved_files),
+                "failure_streak": 0,
+                "last_failure_signature": "",
+                "last_failure_class": "",
+            }
+        log(
+            "Finalize: unresolved cross-story regressions have no owner; "
+            f"requeued {fallback_warned_count} story/stories for human intervention."
+        )
+        return {"stories": stories_update}
+
+    log("Finalize: generating README and running deployment.")
+
+    generate_readme(legacy)
+    emulate_deployment(jira, story_keys, legacy)
+
+    done_updates = {sk: {"column": "done"} for sk in story_keys}
+    for sk, patch in stories_update.items():
+        done_updates[sk] = {**done_updates.get(sk, {}), **patch}
 
     summary = f"Pipeline finalized: {len(story_keys)} story/stories done."
     parts = []

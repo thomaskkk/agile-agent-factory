@@ -124,6 +124,8 @@ def _pre_review_gate(
     if write_scope:
         missing = []
         for scoped_path in write_scope:
+            if scoped_path.endswith("/"):
+                continue
             target = product_root / scoped_path.rstrip("/")
             if not target.exists():
                 missing.append(scoped_path)

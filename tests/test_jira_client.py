@@ -1,4 +1,5 @@
 import pytest
+import requests
 import responses as resp_lib
 
 
@@ -260,3 +261,58 @@ def test_make_adf_bullet_list_multiline_item_uses_hardbreak():
     texts = [n.get("text", "") for n in inline if n["type"] == "text"]
     assert "Scenario: Title" in texts
     assert "  Given context" in texts
+
+
+def test_request_passes_timeout(monkeypatch):
+    import agile_agent_factory.tools.jira_client as jira_client
+
+    captured = {}
+
+    class FakeResponse:
+        ok = True
+        status_code = 200
+        content = b'{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, auth=None, headers=None, timeout=None, **kwargs):
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(jira_client.requests, "request", fake_request)
+
+    client = jira_client.JiraClient()
+    result = client._request("GET", "issue/TEST-1")
+
+    assert result == {"ok": True}
+    assert captured["timeout"] == jira_client.JIRA_TIMEOUT_SECONDS
+
+
+def test_request_retries_on_timeout(monkeypatch):
+    import agile_agent_factory.tools.jira_client as jira_client
+
+    attempts = {"count": 0}
+
+    class FakeResponse:
+        ok = True
+        status_code = 200
+        content = b'{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, auth=None, headers=None, timeout=None, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise requests.Timeout("boom")
+        return FakeResponse()
+
+    monkeypatch.setattr(jira_client.requests, "request", fake_request)
+    monkeypatch.setattr(jira_client.time, "sleep", lambda *_: None)
+
+    client = jira_client.JiraClient()
+    result = client._request("GET", "issue/TEST-1")
+
+    assert result == {"ok": True}
+    assert attempts["count"] == 2

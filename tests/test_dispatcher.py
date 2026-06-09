@@ -164,9 +164,10 @@ def test_wip_limit_caps_concurrent_dispatches():
         wip_limits={"development": 1, "testing": 2, "code_review": 1, "tech_design": 2, "refinement": 3},
     )
     result = dispatch_stories(state)
-    # Only 1 slot in development, so only 1 story dispatched to tl (which moves to development)
+    # Only 1 slot in development, so the TL batch must be restricted to 1 story.
     tl_sends = [s for s in result if s.node == "tl"]
     assert len(tl_sends) == 1
+    assert tl_sends[0].arg["active_story_keys"] == ["F1-1"]
 
 
 # ---------------------------------------------------------------------------
