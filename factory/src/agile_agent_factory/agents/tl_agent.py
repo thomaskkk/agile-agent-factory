@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 
 from agile_agent_factory.agents.contract import AgentResult
 from agile_agent_factory.config import (
@@ -47,6 +48,10 @@ def _resolve_owned_path_from_import(import_stmt: str, arch: dict) -> str | None:
         if isinstance(file_contract, dict) and isinstance(file_contract.get("path"), str)
     }
 
+    package_init_path = PRODUCT_ROOT / package_init
+    flat_path_path = PRODUCT_ROOT / flat_path
+    if package_init_path.exists() and not flat_path_path.exists():
+        return package_init
     if package_init in arch_paths and flat_path not in arch_paths:
         return package_init
     if flat_path in arch_paths:
@@ -54,6 +59,32 @@ def _resolve_owned_path_from_import(import_stmt: str, arch: dict) -> str | None:
     if package_init in arch_paths:
         return package_init
     return flat_path
+
+
+def _canonicalize_contract_path(path: str, product_root: Path | None = None) -> str:
+    """Prefer the real package path when the repo already owns the namespace."""
+    if not isinstance(path, str) or not path.endswith(".py") or path.endswith("/__init__.py"):
+        return path
+
+    product_root = product_root or PRODUCT_ROOT
+    rel_path = Path(path)
+    package_init = rel_path.with_suffix("") / "__init__.py"
+    if (product_root / package_init).exists() and not (product_root / rel_path).exists():
+        return package_init.as_posix()
+    return path
+
+
+def _canonicalize_arch_files(arch: dict, product_root: Path | None = None) -> list[dict]:
+    files: list[dict] = []
+    for file_contract in arch.get("files", []):
+        if not isinstance(file_contract, dict):
+            continue
+        normalized = dict(file_contract)
+        path = normalized.get("path")
+        if isinstance(path, str):
+            normalized["path"] = _canonicalize_contract_path(path, product_root)
+        files.append(normalized)
+    return files
 
 
 def _write_scope_paths_from_test_contract(arch: dict, tc: dict) -> list[str]:
@@ -139,10 +170,11 @@ def design_architecture(
 
 def _write_architecture_files(arch: dict) -> None:
     BP_ARCH_DECISIONS.parent.mkdir(parents=True, exist_ok=True)
+    canonical_files = _canonicalize_arch_files(arch)
 
     files_section = "\n".join(
         f"### `{f['path']}`\n**Purpose:** {f.get('purpose', '')}\n**Functions:** {', '.join(f.get('functions', []))}"
-        for f in arch.get("files", [])
+        for f in canonical_files
     )
     deps = [d for d in arch.get("dependencies", []) if isinstance(d, str) and d.strip()]
     deps_section = "\n".join(f"- `{d}`" for d in deps) if deps else "(none)"
@@ -151,7 +183,7 @@ def _write_architecture_files(arch: dict) -> None:
     )
 
     BP_ARCH_CONSTRAINTS.parent.mkdir(parents=True, exist_ok=True)
-    expected_files = "\n".join(f"- `{f['path']}`" for f in arch.get("files", []))
+    expected_files = "\n".join(f"- `{f['path']}`" for f in canonical_files)
     BP_ARCH_CONSTRAINTS.write_text(
         f"""# Architecture Constraints
 
@@ -189,13 +221,14 @@ def _write_story_task(
 ) -> None:
     path = bp_task_path(story_key)
     path.parent.mkdir(parents=True, exist_ok=True)
+    canonical_files = _canonicalize_arch_files(arch)
 
     criteria = gherkin_criteria.get(story_key, [])
     criteria_block = "\n\n".join(criteria) if criteria else "(no criteria)"
 
     files_section = "\n".join(
         f"- `{f['path']}`: {f.get('purpose', '')} | Functions: {', '.join(f.get('functions', []))}"
-        for f in arch.get("files", [])
+        for f in canonical_files
     )
 
     ux_flows_section = ""

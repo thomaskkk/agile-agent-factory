@@ -587,6 +587,16 @@ def dev_node(state: PipelineState) -> dict:
                     model=DEV_MODEL or None,
                 )
             if not changed_files:
+                if human_feedback:
+                    log("Dev: HITL resume produced no automated changes; routing back to review for human-applied fix.")
+                    return {
+                        "stories": {sk: {
+                            "review_status": "pending_review",
+                            "review_rejection_reason": "",
+                            "last_changed_files": [],
+                            "hitl_type": None,
+                        }},
+                    }
                 summary = (
                     "Developer rework HITL: automated rework produced no material file changes "
                     "after multiple attempts.\n\n"

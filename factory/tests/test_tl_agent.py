@@ -321,3 +321,51 @@ def test_blueprint_task_file_prefers_package_init_for_package_import(tmp_path, m
     assert "`app/repository.py`" in content
     assert "`app/models/__init__.py`" in content
     assert "`app/models.py`" not in content
+
+
+def test_blueprint_task_file_prefers_existing_package_over_stale_flat_contract(tmp_path, monkeypatch):
+    """Task generation must follow the repo's current package layout when architecture is stale."""
+    from agile_agent_factory.agents import tl_agent as tl
+
+    monkeypatch.setattr("agile_agent_factory.agents.tl_agent.bp_task_path", lambda sk: tmp_path / f"{sk}.md")
+    monkeypatch.setattr(tl, "PRODUCT_ROOT", tmp_path / "product")
+
+    product_root = tmp_path / "product"
+    (product_root / "app" / "models").mkdir(parents=True)
+    (product_root / "app" / "models" / "__init__.py").write_text("# package")
+
+    arch = {
+        "files": [
+            {"path": "app/models.py", "purpose": "stale flat module contract", "functions": []},
+            {"path": "app/routes.py", "purpose": "routes", "functions": ["home()"]},
+            {"path": "tests/test_home_page.py", "purpose": "tests", "functions": []},
+        ],
+        "import_rules": "from app.<module> import <name>",
+        "test_command": "uv run pytest tests/ -v",
+        "dependencies": [],
+    }
+    ready_contract = {
+        "test_contract": {
+            "test_file": "tests/test_home_page.py",
+            "test_functions": ["test_home_page_displays_all_recipes_as_links"],
+            "target_imports": [
+                "from app.routes import home",
+                "from app.models import Recipe",
+            ],
+            "fixtures": [],
+            "sample_data": [],
+            "edge_cases": [],
+        }
+    }
+
+    tl._write_story_task(
+        "F3-763",
+        arch,
+        {"F3-763": ["Scenario: Home page\n  Given x\n  When y\n  Then z"]},
+        {},
+        ready_contract,
+    )
+
+    content = (tmp_path / "F3-763.md").read_text()
+    assert "`app/models/__init__.py`" in content
+    assert "`app/models.py`" not in content

@@ -989,6 +989,49 @@ def test_dev_rework_noop_escalates_after_retries():
     assert result["stories"]["F1-1"]["review_status"] == "rework_needed"
 
 
+def test_dev_rework_noop_after_hitl_resume_routes_back_to_review():
+    """Manual HITL fixes should not re-escalate just because the dev agent has no further diff."""
+    from unittest.mock import MagicMock, patch
+
+    dn = _mod()
+    state = {
+        "active_story_key": "F1-1",
+        "stories": {
+            "F1-1": {
+                "story_key": "F1-1",
+                "column": "code_review",
+                "review_status": "rework_needed",
+                "review_rejection_reason": "Connect home page to the shared recipe store.",
+                "hitl_feedback": "Manually fixed on disk. Re-run review.",
+                "test_contract": {
+                    "test_file": "tests/test_home_page.py",
+                    "target_imports": ["from app.routes import home"],
+                },
+            }
+        },
+        "epic_keys": [],
+    }
+
+    jira = MagicMock()
+
+    with (
+        patch.object(dn, "_load_dev_context", return_value="blueprint"),
+        patch.object(dn, "_generate_code_with_llm_guarded", side_effect=[[], []]),
+        patch.object(dn, "_generate_readme_rework_guarded", return_value=[]),
+        patch("agile_agent_factory.nodes.dev_node.JiraClient", return_value=jira),
+        patch("agile_agent_factory.nodes.dev_node.raise_quota_interrupt", return_value=None),
+        patch("agile_agent_factory.tools.aider_client.is_available", return_value=False),
+        patch("langgraph.types.interrupt") as mock_interrupt,
+    ):
+        result = dn.dev_node(state)
+
+    mock_interrupt.assert_not_called()
+    jira.set_flag.assert_not_called()
+    assert result["stories"]["F1-1"]["review_status"] == "pending_review"
+    assert result["stories"]["F1-1"]["review_rejection_reason"] == ""
+    assert result["stories"]["F1-1"]["hitl_type"] is None
+
+
 # ---------------------------------------------------------------------------
 # Fix #5: correction prompt includes spec block
 # ---------------------------------------------------------------------------
