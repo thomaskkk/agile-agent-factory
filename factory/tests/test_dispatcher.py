@@ -170,6 +170,23 @@ def test_wip_limit_caps_concurrent_dispatches():
     assert tl_sends[0].arg["active_story_keys"] == ["F1-1"]
 
 
+def test_same_column_dispatch_prefers_oldest_story_key_first():
+    state = _make_state(
+        {
+            "F3-759": {"story_key": "F3-759", "column": "development"},
+            "F3-758": {"story_key": "F3-758", "column": "development"},
+            "F3-757": {"story_key": "F3-757", "column": "development", "hitl_type": None},
+        },
+        wip_limits={"testing": 1, "development": 3, "code_review": 1, "tech_design": 2, "refinement": 3},
+    )
+
+    result = dispatch_stories(state)
+
+    dev_sends = [s for s in result if s.node == "dev"]
+    assert len(dev_sends) == 1
+    assert dev_sends[0].arg["active_story_key"] == "F3-757"
+
+
 # ---------------------------------------------------------------------------
 # Refinement: QA + UX sub-phases
 # ---------------------------------------------------------------------------

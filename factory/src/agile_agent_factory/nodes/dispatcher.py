@@ -10,6 +10,8 @@ Column flow:
 
 from __future__ import annotations
 
+import re
+
 from langgraph.types import Send
 
 from agile_agent_factory.tools.logger import log
@@ -38,6 +40,15 @@ COLUMN_TO_AGENT = {
 
 def _wip_count(stories: dict, column: str) -> int:
     return sum(1 for s in stories.values() if s.get("column") == column)
+
+
+def _story_dispatch_order(story: dict) -> tuple[str, int, str]:
+    """Sort oldest-first within a column using Jira issue-key sequence as a stable proxy."""
+    story_key = str(story.get("story_key") or "")
+    match = re.match(r"^(.*?)-(\d+)$", story_key)
+    if match:
+        return (match.group(1), int(match.group(2)), story_key)
+    return ("~", 10**12, story_key)
 
 
 def _dispatch_refinement(stories: dict, story: dict, state: PipelineState) -> list[Send]:
@@ -94,6 +105,7 @@ def dispatch_stories(state: PipelineState) -> list[Send] | str:
             s for s in stories.values()
             if s.get("column") == column and not s.get("hitl_type")
         ]
+        ready.sort(key=_story_dispatch_order)
         if not ready:
             continue
 
